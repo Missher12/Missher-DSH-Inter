@@ -44,6 +44,8 @@ Client 插件可以调用 `ctx.sidebarRight.openTab('browser', { params: { url }
 
 命令 `browser.new` 在焦点停靠分栏打开独立浏览器页，替换开始页并保留已有内容页。从聊天区或浮动内容页触发时，使用活动停靠分栏。桌面默认键在 macOS 上为 Cmd+T，在 Windows 上为 Ctrl+T；Windows 和 macOS Web 使用[快捷键服务的平台默认值](../shortcuts/README.zh.md)；Linux Web 默认不绑定此命令。开始页按钮使用蓝色地球图标，并在按钮内显示有效快捷键，不额外弹出重复提示。
 
+兼容的 Desktop 浏览器提供方打开模型控制标签页时，侧栏领取主进程签发的预约，并显示同一个 guest。控制条显示所属 Session、当前动作、控制状态，以及临时或保留登录的存储方式。停止、接管、恢复、允许一次下载和为未来标签保留登录的偏好，都由用户明确操作，通过可信 Desktop 桥执行。普通人工标签页保持原有导航行为。
+
 工具栏提供后退、前进、刷新、前往和在系统浏览器中打开。Web 还提供逐 tab sandbox 开关；关闭它是临时选择，并会显示灰字、琥珀色底的警告。Desktop 显示观察到的页面标题。重启后，Browser 展示保存的标题和 URL；只有点击恢复或刷新才打开该地址。
 
 -----
@@ -93,7 +95,7 @@ Desktop 主进程批准 guest 租约，并执行挂载、导航和权限策略�
 
 #### KV Cache 影响
 
-无；浏览内容不进入模型请求。
+此 UI 不增加提示词文本或工具。单独选择的浏览器提供方负责模型可见的观察内容及其请求成本。
 
 ## 已知限制与延期工作
 
@@ -107,7 +109,7 @@ Desktop 主进程批准 guest 租约，并执行挂载、导航和权限策略�
 - 出于安全原因，浏览器会隐藏很多 iframe 失败：DNS、TLS、mixed-content、CSP 与 `X-Frame-Options` 失败可能触发 `load`，也可能不提供可操作 event，而不是触发 `error`。加载失败 notice 只能作为 best-effort 提示。
 - 只要 tab 仍在 Sidebar 布局中，保存的标题和 URL 就会跨刷新与插件卸载保留。关闭 tab 会删除其检查点。重启恢复不恢复页面内存、未保存的表单或 Chromium history 栈。
 - 本地文件会被拒绝，并继续由 Document Preview 负责。
-- Desktop 按规范化的工作区 CWD 共享进程内存储分区；没有解析到 Workspace 的 Session 单独隔离。Cookie 与 Web storage 不跨应用重启保留。guest 权限、下载与原生 popup 均被拒绝；通过检查的 HTTP(S) popup 请求会打开 Sidebar tab。Host 地址过滤不是通用私网或 DNS-rebinding 防火墙。
+- 人工打开的 Desktop 标签页按规范化的工作区 CWD 共享进程内存储分区；没有解析到 Workspace 的 Session 单独隔离。Cookie 与 Web storage 不跨应用重启保留。人工 guest 的权限、下载与原生 popup 均被拒绝；通过检查的 HTTP(S) popup 请求会打开 Sidebar tab。Host 地址过滤不是通用私网或 DNS-rebinding 防火墙。
 
 <a id="dev-note"></a>
 ### 开发备注

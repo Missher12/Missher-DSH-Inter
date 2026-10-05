@@ -19,7 +19,9 @@ Each provider supplies its upstream tool catalog. The shared service registers o
 
 A provider retains its registration while it shuts down its tools and owned resources. Startup failure releases the attempted registration. The MCP provider keeps its registration during reconnects.
 
-One registered provider does not reserve a desktop for a Session. Callers coordinate complete observe, act, and verify workflows across Sessions and separate DSH processes. A cancelled call cannot undo input that the desktop already received.
+The registry itself does not reserve the desktop. The native candidate provider reserves complete observe, act and verify work segments for one exact Agent within its Host; separate DSH processes, users and other applications remain outside that coordination. Every input consumes a fresh target observation. A cancelled call cannot undo input that the desktop already received.
+
+The optional `computerAuthorization` adapter binds `ComputerAuthorizationRequest`, its `ComputerActivationId` and SDK digest to one trusted native dialog. `ComputerAuthorizationDecision` is allow, deny or cancel; models cannot supply it. Expiry, cancellation, revocation and Host exit invalidate pending approvals. OS permission checks use `prompt: false`; granting accessibility or screen recording permissions remains a separate user operation. The pinned native provider classifies explicit SDK refusals before admitting results, including known `isError=false` envelopes; ordinary page text is not globally classified as an error.
 
 ## Results and platform requirements
 
@@ -34,6 +36,31 @@ The [decision record](../../.agents/notes/implemented/architecture/2026-09-12-co
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxcomputerauthorization--computerauthorization"></a>
+
+### `ctx.computerAuthorization` — `ComputerAuthorization`
+
+Trusted Host-to-Desktop adapter; it is independent of provider registration.
+
+```ts cordis-catalog
+/**
+ * Ask the user about exactly one attested browser/profile attachment.
+ * @param request - SDK digest, expiry, activation, and trusted display fields.
+ * @param signal - cancellation invalidates any late approval.
+ * @returns a single decision; dismissal, expiry, and cancellation never allow.
+ */
+request(request: ComputerAuthorizationRequest, signal: AbortSignal): Promise<ComputerAuthorizationDecision>
+
+/**
+ * Cancel pending requests for an activation; native grants are revoked by SDK session close.
+ * @param activationId - exact Host-lifetime activation being retired.
+ * @returns after the adapter can no longer approve its pending requests.
+ */
+revoke(activationId: ComputerActivationId): Promise<void>
+```
+
+Source: [`packages/computer-use/computer-use/src/authorization.ts`](../../packages/computer-use/computer-use/src/authorization.ts)
 
 <a id="ctxcomputeruse--computeruseregistry"></a>
 

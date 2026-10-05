@@ -14,9 +14,11 @@ Choose **Intel Mac** for a Mac with an Intel processor, and **Ubuntu x64** for a
 
 | Computer / 电脑 | Download / 下载 | Requirements |
 | --- | --- | --- |
-| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.1/deepseek-harness-0.2.0-rc.2-mac-x64-unsigned.dmg) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.1) | macOS x64; community unsigned build |
+| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.2/missher-deepseek-harness-0.2.0-rc.2-cbu-mac-x64.dmg) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.2) | macOS x64; community unsigned build |
 | **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/inter-v0.2.0-rc.2-ubuntu.6) | Ubuntu 24.04 x64 |
 | **Ubuntu x64, portable** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | Built; separate AppImage launch not qualified |
+
+The Intel Mac browser integration build supplies the Host interfaces required by Computer Browser. The Ubuntu downloads above retain their existing validation scope and do not include this integration.
 
 Each release includes SHA-256 checksums and its validation scope. [All releases](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases) retain earlier packages. A source ZIP under **Code** is a source snapshot, not an installer. Automatic installation updates are not configured for these community packages.
 
@@ -57,13 +59,14 @@ Each row opens the plugin’s own GitHub repository. Its README covers installat
 | [Session Bridge](https://github.com/Missher12/Missher-DSH-Session-Bridge) | Session IDs, message delivery and temporary workspaces |
 | [Reasoning Effort](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) | Reasoning slider and model capability settings |
 | [MSE Learning](https://github.com/Missher12/Missher-MSE-Learning) | Scoped learning from corrections and evaluated methods |
+| [Computer Browser](https://github.com/Missher12/Missher-DSH-Computer-Browser) | Visible browser automation and session-owned computer controls; requires the Intel Mac browser integration build |
 | [Media (private)](https://github.com/Missher12/Missher-Media) | Chrome CDP collection and selected exports |
 
 Media is private: a 404 can mean your GitHub account lacks permission. MSE publishes the product only, without private learning records. All plugins are optional; a removed host-version range is not a guarantee of compatibility with every future release.
 
 ### Other maintained extensions
 
-These are separate projects with their own version lines and compatibility evidence. They are not prerequisites for the seven plugins above; review each project’s requirements before installation.
+These are separate projects with their own version lines and compatibility evidence. They are not prerequisites for the plugins above; review each project’s requirements before installation.
 
 | Project | Purpose |
 | --- | --- |

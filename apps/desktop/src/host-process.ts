@@ -149,6 +149,7 @@ export class DesktopHostProcess {
   private stopping = false
   private shutdownCompleted = false
   private nextControlId = 1
+  private readonly interactions = new Map<number, AbortController>()
   private readonly controlRequests = new Map<number, {
     resolve: (response: DesktopHostControlResponse) => void
     reject: (error: Error) => void
@@ -177,6 +178,8 @@ export class DesktopHostProcess {
     private readonly packageManager?: { readonly pnpm: string; readonly nodeBin: string },
 
     private readonly onPlatformSession?: (session: PlatformSession | null) => void,
+    private readonly onInteraction?: (kind: string, value: unknown, signal: AbortSignal) => Promise<unknown>,
+    private readonly onInteractionState?: (value: unknown) => void,
   ) {}
 
   /**
@@ -204,6 +207,33 @@ export class DesktopHostProcess {
     child.stderr?.on('data', (chunk: string) => { this.stderr = (this.stderr + chunk).slice(-MAX_HOST_DIAGNOSTIC_CHARS) })
     child.stdout?.pipe(process.stdout)
     child.on('message', (message: unknown) => {
+      if (typeof message === 'object' && message !== null && 'type' in message) {
+        if (message.type === 'desktop-interaction-state') {
+          try { this.onInteractionState?.(message) } catch (error) { console.error('Desktop interaction state listener failed', error) }
+          return
+        }
+        if (message.type === 'desktop-interaction-cancel' && 'requestId' in message && Number.isSafeInteger(message.requestId)) {
+          this.interactions.get(Number(message.requestId))?.abort(); return
+        }
+        if (message.type === 'desktop-interaction' && 'requestId' in message && Number.isSafeInteger(message.requestId)
+          && 'kind' in message && typeof message.kind === 'string' && 'value' in message) {
+          const requestId = Number(message.requestId)
+          if (this.interactions.has(requestId) || this.stopping) return
+          const controller = new AbortController()
+          this.interactions.set(requestId, controller)
+          const { kind, value } = message
+          const answer = Promise.resolve().then(() => {
+            if (this.onInteraction === undefined) throw new Error('Desktop interaction unavailable')
+            return this.onInteraction(kind, value, controller.signal)
+          })
+          void answer.then((value) => {
+            if (child.connected && !controller.signal.aborted) child.send({ type: 'desktop-interaction-result', requestId, value }, () => {})
+          }, () => {
+            if (child.connected) child.send({ type: 'desktop-interaction-result', requestId, error: 'unavailable' }, () => {})
+          }).catch((error: unknown) => { console.error('Desktop interaction reply failed', error) }).finally(() => { this.interactions.delete(requestId) })
+          return
+        }
+      }
       if (!isDesktopHostEvent(message)) {
         this.fail(new Error('dsh desktop host sent an invalid IPC event'))
         child.kill('SIGTERM')
@@ -289,6 +319,7 @@ export class DesktopHostProcess {
     const child = this.child
     if (child === undefined) return
     this.stopping = true
+    for (const operation of this.interactions.values()) operation.abort()
     this.onPlatformSession?.(null)
     if (child.connected) child.send({ type: 'shutdown' }, (error) => { if (error !== null) this.fail(error) })
     const exited = this.exitPromise ?? Promise.resolve()
@@ -307,7 +338,14 @@ export class DesktopHostProcess {
     }
   }
 
+  /** @param key - current trusted UI control. @param action - explicit user gesture. */
+  interactionControl(key: string, action: 'resume' | 'stopped' | 'taken-over'): void {
+    if (this.child?.connected && !this.stopping) this.child.send({ type: 'desktop-interaction-control', key, action }, () => {})
+  }
+
   private fail(error: Error): void {
+    for (const operation of this.interactions.values()) operation.abort()
+    this.interactions.clear()
     this.onPlatformSession?.(null)
     this.readyReject(error)
     for (const request of this.controlRequests.values()) request.reject(error)

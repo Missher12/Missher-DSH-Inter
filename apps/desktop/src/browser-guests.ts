@@ -1,5 +1,5 @@
 /** Main-process ownership and fixed isolation policy for Sidebar webview guests. */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron'
 import type { DesktopBrowserLeaseId, DesktopBrowserOpenRequest, DesktopBrowserReservation } from '@deepseek-ai/dsh-client-ui-sidebar-browser/types'
 import { DESKTOP_IPC } from './ipc.ts'
@@ -18,7 +18,11 @@ export class DesktopBrowserGuests {
   private readonly leases = new Map<DesktopBrowserLeaseId, GuestLease>()
 
   /** @param hostUrl - current authenticated DSH Host, which guests cannot request. */
-  constructor(private readonly hostUrl: () => string | undefined) {}
+  constructor(
+    private readonly hostUrl: () => string | undefined,
+    private readonly download?: (event: Electron.Event, item: Electron.DownloadItem, guest: WebContents) => void,
+    private readonly openRequested?: (lease: DesktopBrowserLeaseId, url: string) => boolean,
+  ) {}
 
   /**
    * Reserve one guest in a workspace's process-lifetime partition.
@@ -26,19 +30,41 @@ export class DesktopBrowserGuests {
    * @param workspace - workspace identity received over IPC.
    * @returns opaque lease and the partition approved for it.
    */
-  acquire(owner: WebContents, workspace: unknown): DesktopBrowserReservation {
+  acquire(owner: WebContents, workspace: unknown, persistent = false): DesktopBrowserReservation {
     if (typeof workspace !== 'string' || workspace.length === 0 || workspace.length > 4096) {
       throw new Error('desktop browser: a workspace storage identity is required')
     }
-    let partition = this.partitions.get(workspace)
+    const storageKey = `${persistent ? 'persistent' : 'temporary'}:${workspace}`
+    let partition = this.partitions.get(storageKey)
     if (partition === undefined) {
-      partition = `dsh-sidebar-browser-${randomUUID()}`
+      partition = persistent ? `persist:dsh-browser-${createHash('sha256').update(workspace).digest('hex')}` : `dsh-sidebar-browser-${randomUUID()}`
       this.configureSession(session.fromPartition(partition))
-      this.partitions.set(workspace, partition)
+      this.partitions.set(storageKey, partition)
     }
     const lease = randomUUID() as DesktopBrowserLeaseId
     this.leases.set(lease, { owner, partition, attached: false })
     return { lease, partition }
+  }
+
+  /** @param owner - trusted caller. @param id - pre-issued model guest. @returns the reservation if still owned and unattached. */
+  claim(owner: WebContents, id: unknown): DesktopBrowserReservation {
+    const lease = this.owned(owner, id)
+    if (lease.attached) throw new Error('Browser reservation already attached')
+    return { lease: id as DesktopBrowserLeaseId, partition: lease.partition }
+  }
+
+  /** @param owner - trusted caller. @param id - main-issued lease. @returns exact attached guest. */
+  guest(owner: WebContents, id: unknown): WebContents {
+    const value = this.owned(owner, id).guest
+    if (value === undefined || value.isDestroyed()) throw new Error('Browser target unavailable')
+    return value
+  }
+
+  private owned(owner: WebContents, id: unknown): GuestLease {
+    if (typeof id !== 'string') throw new Error('Invalid browser lease')
+    const lease = this.leases.get(id as DesktopBrowserLeaseId)
+    if (lease === undefined || lease.owner !== owner) throw new Error('Browser target belongs to another window')
+    return lease
   }
 
   /**
@@ -67,7 +93,8 @@ export class DesktopBrowserGuests {
    * @param window - primary application window.
    * @param attachInput - attaches native input after guest ownership is verified and returns its disposer.
    */
-  bind(window: BrowserWindow, attachInput: (guest: WebContents, name: DesktopBrowserLeaseId) => () => void): void {
+  bind(window: BrowserWindow, attachInput: (guest: WebContents, name: DesktopBrowserLeaseId) => () => void,
+    attached?: (lease: DesktopBrowserLeaseId, guest: WebContents) => void): void {
     const owner = window.webContents
     owner.on('will-attach-webview', (event, preferences, params) => {
       const id = typeof params.src === 'string' && params.src.startsWith('about:blank#')
@@ -106,6 +133,7 @@ export class DesktopBrowserGuests {
         lease.guest = guest
         attachedLease = id
         lease.releaseInput = attachInput(guest, id)
+        attached?.(id, guest)
         guest.once('destroyed', () => { lease.releaseInput?.(); this.leases.delete(id) })
       })
       guest.setWindowOpenHandler(({ url, postBody }) => {
@@ -113,7 +141,7 @@ export class DesktopBrowserGuests {
         if (attachedLease !== undefined && lease?.guest === guest && lease.owner === owner && !owner.isDestroyed()
           && postBody === undefined && this.allowedNavigation(url)) {
           const request: DesktopBrowserOpenRequest = { lease: attachedLease, url: new URL(url).href }
-          owner.send(DESKTOP_IPC.browserOpenRequested, request)
+          if (this.openRequested?.(attachedLease, request.url) !== true) owner.send(DESKTOP_IPC.browserOpenRequested, request)
         }
         return { action: 'deny' }
       })
@@ -143,7 +171,10 @@ export class DesktopBrowserGuests {
     browserSession.setPermissionCheckHandler(() => false)
     browserSession.setDevicePermissionHandler(() => false)
     browserSession.setDisplayMediaRequestHandler((_request, callback) => { callback({}) })
-    browserSession.on('will-download', (event) => { event.preventDefault() })
+    browserSession.on('will-download', (event, item, guest) => {
+      if (this.download === undefined || ![...this.leases.values()].some(lease => lease.guest === guest)) event.preventDefault()
+      else this.download(event, item, guest)
+    })
     browserSession.webRequest.onBeforeRequest((details, callback) => {
       const url = new URL(details.url)
       const network = ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol)
@@ -153,7 +184,8 @@ export class DesktopBrowserGuests {
     })
   }
 
-  private allowedNavigation(value: string): boolean {
+  /** @param value - requested URL. @returns whether the page may navigate outside the Host. */
+  allowedNavigation(value: string): boolean {
     if (!URL.canParse(value)) return false
     const url = new URL(value)
     return ['http:', 'https:'].includes(url.protocol) && url.username === '' && url.password === ''

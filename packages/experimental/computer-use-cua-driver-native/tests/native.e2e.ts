@@ -2,10 +2,10 @@
 
 import { expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import ComputerUseRegistry from '@deepseek-ai/dsh-computer-use'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as NativeProvider from '../src/index.ts'
 
 it.skipIf(process.env.DSH_COMPUTER_USE_NATIVE_E2E !== '1')(
@@ -15,8 +15,9 @@ it.skipIf(process.env.DSH_COMPUTER_USE_NATIVE_E2E !== '1')(
     const ctx = new Context()
     try {
       await ctx.plugin(ComputerUseRegistry)
-      await ctx.plugin(SystemPrompt)
-      await ctx.plugin(ToolRuntime)
+      await mountAgentLoopTestDependencies(ctx)
+      const harness = await mountAgentLoopTestHarness(ctx)
+      const agent = await harness.create(SessionId('native-sdk-compatibility'))
       const provider = ctx.plugin(NativeProvider)
       await provider
       expect(ctx.computerUse.providerName).toBe('cua-driver-native')
@@ -28,6 +29,7 @@ it.skipIf(process.env.DSH_COMPUTER_USE_NATIVE_E2E !== '1')(
       const result = await ctx.tools.execute({
         name: 'cua_driver_native__check_permissions',
         callId: ToolCallId('native-live-permissions'),
+        agent,
         arguments: { prompt: false },
         signal,
       })

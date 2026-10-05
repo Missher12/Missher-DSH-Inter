@@ -23,6 +23,9 @@
     "./brand": {
       "types": "./lib/types/brand.d.ts",
       "default": "./lib/types/brand.js"
+    },
+    "./authorization": {
+      "types": "./lib/types/authorization.d.ts"
     }
   },
   "files": [

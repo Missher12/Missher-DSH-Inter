@@ -45,7 +45,9 @@ Use `mode: attach` and set `endpoint` to an HTTP(S) debugging URL or WS(S) brows
 | `endpoint` | required for attach | Existing browser debugging endpoint |
 | `toolCallTimeoutMs` | MCP client default | Per-call timeout in milliseconds |
 
-The [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-experimental-browser-use-playwright-mcp) lists accepted fields. The profile or preset selects the browser mode. The child process clears inherited `PLAYWRIGHT_MCP_*` options so they cannot replace that configuration.
+The [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-experimental-browser-use-playwright-mcp) lists accepted fields. The profile or preset selects the browser mode. Set `headless: false` for a visible independent Chromium window; this provider does not operate the Electron sidebar. The child process clears inherited `PLAYWRIGHT_MCP_*` options so they cannot replace that configuration.
+
+The server runs in an activation-owned temporary directory. Arbitrary server-side JavaScript, uploads, file drops, and model-selected output filenames are unavailable; these require a separately authorized file workflow. Screenshots still enter the normal image attachment pipeline. The upstream file-root guard is not an operating-system sandbox. A trusted browser-control consumer can stop, take over, and resume the activation; resume requires a fresh `browser_snapshot`. Delivered actions may finish while stopping, and canceled actions are never replayed automatically.
 
 When configuring the system prompt's `toolOrder` for the whole process, leave browser tools under `<unlisted-tools>`. Explicitly listing browser tool names can make prompt assembly fail for Sessions without a browser connection.
 

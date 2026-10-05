@@ -30,6 +30,8 @@ export interface ToolBridgeOptions {
   registrationFailure: 'contain' | 'throw'
   serverName: string
   toolCallTimeoutMs: number
+  /** Exact upstream names omitted at discovery and refresh; excluded tools have no executor registration. */
+  excludedTools?: readonly string[]
 }
 
 /** State for one sync generation: the current set of disposers keyed by public name. */
@@ -122,6 +124,7 @@ export async function syncTools(
     ? { tools: [] }
     : await client.listTools(undefined, { cacheMode: 'refresh' })
   for (const tool of response.tools) {
+    if (opts.excludedTools?.includes(tool.name)) continue
     const publicName = publicToolName(opts.serverName, tool.name)
     if (definitions.has(publicName)) {
       throw new Error(

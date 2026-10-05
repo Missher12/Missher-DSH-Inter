@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/experimental/browser-use-electron/README.md
+/:
+  en: d55e19eecfa1fd7e
+  zh: 398f1f665611672f
+/deepseek-ai-dsh-experimental-browser-use-electron:
+  en: e00cbff648e03be4
+  zh: d40d38b68c4751bb
+/deepseek-ai-dsh-experimental-browser-use-electron/summary:
+  en: 940c5297d6fd830d
+  zh: 869c7cf01a19a644
+/deepseek-ai-dsh-experimental-browser-use-electron/table-of-contents:
+  en: 23386452a66b2fbd
+  zh: 55b2121ae6059425
+/deepseek-ai-dsh-experimental-browser-use-electron/use-this-package:
+  en: 20f52b9e27712ea1
+  zh: 45131d3295a00107
+/deepseek-ai-dsh-experimental-browser-use-electron/understand-the-implementation:
+  en: 436819ac76d93236
+  zh: ef36bd71d22fcb39
+/deepseek-ai-dsh-experimental-browser-use-electron/further-exploration:
+  en: 8722d63fe2a253e9
+  zh: fca237737a78eceb
+/deepseek-ai-dsh-experimental-browser-use-electron/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-experimental-browser-use-electron/model-experience/browser-interaction:
+  en: bb63cb95c2bacece
+  zh: 616bea090686ede1
+/deepseek-ai-dsh-experimental-browser-use-electron/model-experience/browser-interaction/what-the-model-sees:
+  en: 371cd105717e8f41
+  zh: b58c10ca318ef8b0
+/deepseek-ai-dsh-experimental-browser-use-electron/model-experience/browser-interaction/token-effect:
+  en: a42bb1c44dd2e18d
+  zh: 5bcaddd3bc66a9c1
+/deepseek-ai-dsh-experimental-browser-use-electron/model-experience/browser-interaction/kv-cache-effect:
+  en: 6ed57b64e0115df4
+  zh: a9a6399b44884adc
+/deepseek-ai-dsh-experimental-browser-use-electron/known-limitations-and-deferred-work:
+  en: 19f0a1695af3b039
+  zh: e267d483dac599db
+/deepseek-ai-dsh-experimental-browser-use-electron/known-limitations-and-deferred-work/dev-note:
+  en: 6e4994f7116d48de
+  zh: 9560428b8e416592

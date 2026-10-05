@@ -45,7 +45,9 @@ kind: "package-reference"
 | `endpoint` | attach 时必填 | 已有浏览器调试端点 |
 | `toolCallTimeoutMs` | MCP 客户端默认值 | 单次调用超时，单位为毫秒 |
 
-[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-experimental-browser-use-playwright-mcp)列出接受的字段。浏览器模式由 profile 或 preset 选择。子进程会清空继承的 `PLAYWRIGHT_MCP_*` 选项，避免其替换该配置。
+[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-experimental-browser-use-playwright-mcp)列出接受的字段。浏览器模式由 profile 或 preset 选择。设置 `headless: false` 显示独立 Chromium 窗口；此提供方不操作 Electron 侧栏。子进程会清空继承的 `PLAYWRIGHT_MCP_*` 选项，避免其替换该配置。
+
+服务器使用本次激活专属的临时目录。任意服务器端 JavaScript、上传、文件拖放和模型指定的输出文件名不可用；这些功能需要独立授权的文件流程。截图仍进入正常的图片附件管线。上游文件根目录检查不构成操作系统沙箱。可信浏览器控制消费方可停止、接管和恢复本次激活；恢复后必须先执行新的 `browser_snapshot`。停止期间已投递的动作可能完成，取消的动作不会自动重放。
 
 为整个进程配置系统提示词的 `toolOrder` 时，将浏览器工具留在 `<unlisted-tools>` 中。显式列出浏览器工具名称可能导致未获得浏览器连接的 Session 无法组装提示词。
 

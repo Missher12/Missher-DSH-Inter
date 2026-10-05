@@ -15,20 +15,20 @@
   en: d152484eb41ac6b4
   zh: 725b47765ee8f30b
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/use-this-package:
-  en: b1d93e5d9cdefd2c
-  zh: 26bf7c66a154e831
+  en: 805b98fb74d2375b
+  zh: 9326e5f9516ec1b3
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/use-this-package/minimal-configuration:
-  en: 5dc426f9c8d17959
-  zh: 402fc48b02be911a
+  en: 9f1384d6964fa4af
+  zh: 78a168f6d04b230c
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/use-this-package/host-requirements:
-  en: 5b907271715ce730
-  zh: 21b71f9ce6e6dafd
+  en: 89c143214f01bb07
+  zh: fc36ca3a1d9dd1a7
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/use-this-package/verify-the-installed-sdk:
-  en: c3022cbadb94589b
-  zh: b426ea3dbeafd352
+  en: 986d06a68539857e
+  zh: e1aa5e18b085efb4
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/understand-the-implementation:
-  en: 956c3b0fb827a163
-  zh: 88bdf97cc5e36230
+  en: 4dcf80c093853271
+  zh: 5dcb8f73c7356efd
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/further-exploration:
   en: d24023319ead888c
   zh: ab28be480aced0a9
@@ -54,8 +54,8 @@
   en: 78541947f8ec0263
   zh: 8d7c86c98467f137
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/model-experience/discovered-cua-driver-tools-and-results/what-the-model-sees:
-  en: 1f832b4ff07d1990
-  zh: 79b580515f1cd9a7
+  en: b8bb6413a5ee45e7
+  zh: 3328cfbc184c4583
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/model-experience/discovered-cua-driver-tools-and-results/token-effect:
   en: 45ae4538a26eef00
   zh: 1df500d07e8a5cb9
@@ -63,8 +63,8 @@
   en: dd4780c267daf1a6
   zh: 6502c0437085b37f
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/known-limitations-and-deferred-work:
-  en: 2a2a4b83ca83b5e0
-  zh: 32ca00d0ac9a30a5
+  en: 7f6636cae47ac021
+  zh: 8eda40289a9be562
 /deepseek-ai-dsh-experimental-computer-use-cua-driver-native/known-limitations-and-deferred-work/dev-note:
   en: e67f633dc6fe7773
   zh: e88aeb617ffb74ea

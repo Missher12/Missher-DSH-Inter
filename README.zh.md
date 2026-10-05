@@ -14,9 +14,11 @@ Intel 芯片的 Mac 选择 **Intel Mac**；使用 Intel/AMD 64 位处理器的 U
 
 | 电脑 | 下载 | 适用范围 |
 | --- | --- | --- |
-| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.1/deepseek-harness-0.2.0-rc.2-mac-x64-unsigned.dmg) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.1) | Intel Mac；社区未公证包 |
+| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.2/missher-deepseek-harness-0.2.0-rc.2-cbu-mac-x64.dmg) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.2) | Intel Mac；社区未公证包 |
 | **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/inter-v0.2.0-rc.2-ubuntu.6) | Ubuntu 24.04 x64 |
 | **Ubuntu x64 便携格式** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | 已构建；未单独完成 AppImage 启动验收 |
+
+Intel Mac 浏览器集成版提供电脑与浏览器插件所需的宿主接口。上面的 Ubuntu 下载仍沿用原验证范围，不包含这次浏览器集成。
 
 每个发布页提供 SHA-256 校验文件和验证范围，[全部发布记录](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases)保留早期安装包。GitHub 的 **Code → Download ZIP** 下载的是源码，不能代替安装包。这些社区包尚未配置自动安装更新源。
 
@@ -57,13 +59,14 @@ sudo apt install ./deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb
 | [会话桥接](https://github.com/Missher12/Missher-DSH-Session-Bridge) | 复制会话 ID、跨会话投递和临时工作区 |
 | [思考强度](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) | 思考滑块、配色以及模型能力与档位设置 |
 | [MSE 持久学习](https://github.com/Missher12/Missher-MSE-Learning) | 保存纠错和方法，并按任务与预算召回 |
+| [电脑与浏览器](https://github.com/Missher12/Missher-DSH-Computer-Browser) | 可见浏览器操作与按会话隔离的电脑控制；需要包含浏览器集成的 Intel Mac 构建 |
 | [Media 媒体采集（私有）](https://github.com/Missher12/Missher-Media) | 通过 Chrome CDP 采集、保留证据和选择导出 |
 
 Media 保持私有：GitHub 显示 404 可能是账号没有访问权限。MSE 只公开产品代码，不包含私人学习记录。所有插件按需选择；取消宿主版本号限制不等于保证未来所有版本都兼容。
 
 ### 其他独立扩展
 
-这些是独立维护的项目，有自己的版本线和兼容记录，不是上面七个插件的前置依赖。安装前先看各仓库要求，不能把旧基线验收当成当前桌面已经通过。
+这些是独立维护的项目，有自己的版本线和兼容记录，不是上面的插件的前置依赖。安装前先看各仓库要求，不能把旧基线验收当成当前桌面已经通过。
 
 | 项目 | 用途 |
 | --- | --- |

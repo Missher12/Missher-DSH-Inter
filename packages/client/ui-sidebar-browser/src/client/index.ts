@@ -12,7 +12,7 @@ import { createBrowserControllers } from './browser/BrowserController.ts'
 import type { BrowserInjected } from './browser/BrowserController.ts'
 import { createIframePage } from './pages.ts'
 import { createElectronPage } from './electron/pages.ts'
-import type { DesktopBrowserBridge } from '../types.ts'
+import type { DesktopBrowserBridge, DesktopBrowserLeaseId } from '../types.ts'
 import { browserWorkspace } from './electron/workspace.ts'
 import type { BrowserPageFactory } from './browser/BrowserPage.ts'
 import { BROWSER_ID, browserDefinition } from './definition.tsx'
@@ -32,7 +32,7 @@ export type { BrowserAddressFailure, BrowserAddressResult, BrowserTarget } from 
 declare module '@deepseek-ai/dsh-client-ui-sidebar-right/client' {
   interface SidebarRightTabParamsMap {
     /** Optional initial Browser URL. */
-    browser: { readonly url?: string }
+    browser: { readonly url?: string; readonly automationLease?: DesktopBrowserLeaseId }
   }
 }
 
@@ -99,6 +99,19 @@ export function apply(ctx: Context): void {
     installFrames(scope, sessionId => options => createElectronPage(options, desktop,
       signal => browserWorkspace(scope.workspaces.list, sessionId, signal)))
   })
+  const onModelOpen = desktop?.automationVersion === 1 ? desktop.onModelOpen?.bind(desktop) : undefined
+  if (onModelOpen !== undefined) {
+    ctx.effect(() => {
+      const opened = new Set<DesktopBrowserLeaseId>()
+      return onModelOpen((request) => {
+        if (opened.has(request.lease)) return
+        opened.add(request.lease)
+        ctx.sidebarRight.openTabIn(request.sessionId as BrowserBodyProps['sessionId'], 'browser', {
+          params: { url: request.url, automationLease: request.lease }, revealIfOpened: false,
+        })
+      })
+    }, 'ui-sidebar-browser.model-tabs')
+  }
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
     name: 'sidebar.right.pane.tab.title', key: BROWSER_ID, store,
   }, BrowserTitle)), 'ui-sidebar-browser.title')

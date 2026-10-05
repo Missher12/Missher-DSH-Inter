@@ -44,6 +44,8 @@ Client plugins can open a tab through `ctx.sidebarRight.openTab('browser', { par
 
 The `browser.new` command opens a separate Browser page in the focused dock pane, replacing a guide and retaining existing content pages. From the conversation or a floating content page, it uses the active dock pane. Desktop defaults to Cmd+T on macOS and Ctrl+T on Windows; Windows and macOS Web use the [shortcut service’s platform defaults](../shortcuts/README.md); Linux Web leaves the command unbound. The guide button uses a blue globe and displays the effective shortcut inline without a duplicate tooltip.
 
+When a compatible Desktop browser provider opens a model-controlled tab, the Sidebar claims the main-issued reservation and shows that same guest. Its control bar displays the owning Session, current operation, control state, and temporary or retained sign-in storage. Stop, takeover, resume, one-download permission, and the preference to retain sign-in for future tabs all require explicit user gestures through the trusted Desktop bridge. Manual tabs keep their ordinary navigation behavior.
+
 The toolbar provides Back, Forward, Reload, Go, and Open in system browser. Web also offers a per-tab sandbox toggle; disabling it is temporary and displays an amber warning with neutral text. Desktop shows the observed page title. After a restart, Browser shows the saved title and URL; Restore or Reload opens that address only when requested.
 
 -----
@@ -93,7 +95,7 @@ None, as Browser tabs are user-facing presentation state and register no tool, p
 
 #### KV Cache effect
 
-None; browsing does not enter a model request.
+This UI adds no prompt text or tools. A separately selected browser provider owns model-visible observations and their request cost.
 
 ## Known Limitations and Deferred Work
 
@@ -107,7 +109,7 @@ The isolation policy deliberately gives up some browser compatibility:
 - Browsers conceal many iframe failures for security: DNS, TLS, mixed-content, CSP, and `X-Frame-Options` failures may emit `load` or no actionable event instead of `error`. The load-failure notice is best-effort.
 - Saved title and URL survive reloads and plugin unload while the tab remains in Sidebar's layout. Closing the tab removes its checkpoint. Restart restoration does not recover page memory, unsaved forms or Chromium's history stack.
 - Local files are rejected and remain owned by Document Preview.
-- Desktop shares process-local storage partitions by canonical workspace CWD; Sessions without a resolved Workspace are isolated separately. Cookies and Web storage do not survive application restart. Guest permissions, downloads and native popups are denied; approved HTTP(S) popup requests open Sidebar tabs. Host-address filtering is not a general private-network or DNS-rebinding firewall.
+- Manually opened Desktop tabs share process-local storage partitions by canonical workspace CWD; Sessions without a resolved Workspace are isolated separately. Cookies and Web storage do not survive application restart. Manual guest permissions, downloads and native popups are denied; approved HTTP(S) popup requests open Sidebar tabs. Host-address filtering is not a general private-network or DNS-rebinding firewall.
 
 <a id="dev-note"></a>
 ### Dev Note

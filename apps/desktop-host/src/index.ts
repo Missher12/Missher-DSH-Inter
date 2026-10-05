@@ -8,6 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-deepseek-account'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { installDesktopInteraction } from './interaction.ts'
 import * as desktopOffice from './office.ts'
 
 import { installDesktopUpdateTaskControl } from './update-tasks.ts'
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     resolvedProfile: { profile, installAnchor },
     patchFiles: [],
     args: ['--no-open', '--port', '19387'],
+    prepareContext: installDesktopInteraction,
     ...(process.argv[5] === undefined ? {} : {
       packageManager: {
         command: process.execPath,

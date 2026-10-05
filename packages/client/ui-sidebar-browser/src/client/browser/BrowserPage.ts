@@ -2,12 +2,14 @@
 import type { BrowserPresentation } from '../view/BrowserPresentation.ts'
 import type { BrowserFrame } from './BrowserFrame.ts'
 import type { BrowserTabState } from './BrowserPersistence.ts'
+import type { DesktopBrowserLeaseId } from '../../types.ts'
 
 /** Provider construction inputs; persistence does not enter the live navigation interface. */
 export interface BrowserPageOptions {
   readonly initial: BrowserTabState | undefined
   readonly persist: (state: BrowserTabState) => void
   readonly openRequested: (url: string) => void
+  readonly automationLease?: DesktopBrowserLeaseId
 }
 
 /** The owning controller disposes frame; UI mounts only presentation. */

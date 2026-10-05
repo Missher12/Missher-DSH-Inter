@@ -4,14 +4,21 @@ import type { DesktopBrowserBridge, DesktopBrowserLeaseId, DesktopBrowserReserva
 import type { BrowserTabState } from '../src/client/browser/BrowserPersistence.ts'
 import { createElectronPage } from '../src/client/electron/pages.ts'
 import { ElectronWebviewPresentation } from '../src/client/electron/ElectronWebviewPresentation.ts'
+import type { DesktopBrowserState } from '@deepseek-ai/dsh-browser-use/desktop'
 
 let sequence = 0
 
 /** @returns one isolated, explicitly mounted page with native operations replaced by spies. */
-export function electronFixture(initial?: BrowserTabState) {
+export function electronFixture(initial?: BrowserTabState, modelState?: DesktopBrowserState) {
   const opens = new Set<(url: string) => void>()
-  const reservation: DesktopBrowserReservation = { lease: `lease-${++sequence}` as DesktopBrowserLeaseId, partition: 'partition' }
+  const states = new Set<(state: DesktopBrowserState) => void>()
+  const reservation: DesktopBrowserReservation = { lease: (modelState?.target ?? `lease-${++sequence}`) as DesktopBrowserLeaseId, partition: 'partition' }
   const bridge = {
+    automationVersion: 1,
+    claim: vi.fn(async (_lease: DesktopBrowserLeaseId) => reservation),
+    state: vi.fn(async (_lease: DesktopBrowserLeaseId) => modelState),
+    control: vi.fn(async (_lease: DesktopBrowserLeaseId, _action: Parameters<NonNullable<DesktopBrowserBridge['control']>>[1]) => {}),
+    onState: (listener: (state: DesktopBrowserState) => void) => { states.add(listener); return () => { states.delete(listener) } },
     acquire: vi.fn(async (_workspace: string) => reservation),
     release: vi.fn(async (_lease: DesktopBrowserLeaseId) => {}),
     onOpenRequested: vi.fn((_lease: DesktopBrowserLeaseId, listener: (url: string) => void) => {
@@ -22,7 +29,8 @@ export function electronFixture(initial?: BrowserTabState) {
   const workspace = vi.fn(async (_signal: AbortSignal) => 'cwd:/workspace')
   const persist = vi.fn()
   const openRequested = vi.fn()
-  const page = createElectronPage({ initial, persist, openRequested }, bridge, workspace)
+  const page = createElectronPage({ initial, persist, openRequested,
+    ...modelState === undefined ? {} : { automationLease: reservation.lease } }, bridge, workspace)
   const presentation = page.presentation
   if (!(presentation instanceof ElectronWebviewPresentation)) throw new Error('expected the Electron presentation')
   const create = presentation.createElement.bind(presentation)
@@ -48,7 +56,7 @@ export function electronFixture(initial?: BrowserTabState) {
   host.id = `electron-fixture-${sequence}`
   document.body.append(host)
   return {
-    ...page, presentation, bridge, workspace, persist, openRequested, opens, guests, host, reservation,
+    ...page, presentation, bridge, workspace, persist, openRequested, opens, states, guests, host, reservation,
     mount: () => presentation.mount(host.id),
     async guest() {
       await vi.waitFor(() => { expectGuest() })

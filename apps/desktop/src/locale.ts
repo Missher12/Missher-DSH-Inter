@@ -1,6 +1,13 @@
 /** Typed English and Chinese copy owned by the Electron shell. */
 
 export const en = {
+  interactionMenu: 'Browser and desktop control',
+  interactionEmpty: 'No browser or desktop task is active.',
+  interactionChoose: 'Choose the task to control.',
+  interactionAction: 'Stopping blocks new actions. Already delivered input is not undone. Resume requires a fresh observation.',
+  interactionStop: 'Stop',
+  interactionTakeover: 'Take over',
+  interactionResume: 'Resume',
   cliCommandMenu: 'Manage dsh Command…',
   cliCommandTitle: 'Manage dsh Command',
   cliCommandLocation: 'Desktop command: {path}',
@@ -176,6 +183,13 @@ export const en = {
 export type DesktopMessages = { readonly [Key in keyof typeof en]: string }
 
 export const zh = {
+  interactionMenu: '浏览器与桌面控制',
+  interactionEmpty: '当前没有浏览器或桌面任务。',
+  interactionChoose: '选择要控制的任务。',
+  interactionAction: '停止会阻止新动作，已投递的输入不会撤销。恢复后需要重新观察。',
+  interactionStop: '停止',
+  interactionTakeover: '接管',
+  interactionResume: '恢复',
   cliCommandMenu: '管理 dsh 命令…',
   cliCommandTitle: '管理 dsh 命令',
   cliCommandLocation: 'Desktop 命令：{path}',

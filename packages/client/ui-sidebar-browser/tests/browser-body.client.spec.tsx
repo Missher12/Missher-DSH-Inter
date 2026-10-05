@@ -281,3 +281,29 @@ describe('BrowserBody', () => {
   })
 
 })
+
+it('shows main-owned browser control state and routes explicit user gestures to the same tab', async () => {
+  const target = 'owned-target' as import('@deepseek-ai/dsh-browser-use/desktop').BrowserTargetId
+  const state = createSnapshotStore<BrowserFrameState>({ ...emptyBrowserFrame(), automation: {
+    target, sessionId: 'session', status: 'running', storage: 'temporary', operation: 'fill',
+  } })
+  const control = vi.fn(async () => {})
+  const mounted = mountBrowser(undefined, { createPage: () => ({
+    presentation: { mount: () => () => {} },
+    frame: { getSnapshot: () => state.getSnapshot(), subscribe: listener => state.subscribe(listener),
+      control, loadUrl: vi.fn(), goBack: vi.fn(), goForward: vi.fn(), reload: vi.fn(), dispose: async () => {} },
+  }) })
+  expect(mounted.view.getByText(zh['automation.status.running'])).toBeDefined()
+  expect(mounted.view.getByText(zh['automation.storage.temporary'])).toBeDefined()
+  expect(mounted.view.getByText(zh['automation.action.fill'])).toBeDefined()
+  fireEvent.click(mounted.view.getByRole('button', { name: zh['automation.takeover'] }))
+  await waitFor(() => { expect(control).toHaveBeenCalledWith('takeover') })
+  fireEvent.click(mounted.view.getByRole('button', { name: zh['automation.download'] }))
+  expect(control).toHaveBeenCalledWith('allow-download')
+  fireEvent.click(mounted.view.getByRole('button', { name: zh['automation.persistent'] }))
+  expect(control).toHaveBeenCalledWith('persistent')
+  expect(mounted.view.getByRole('button', { name: zh['automation.resume'] })).toHaveProperty('disabled', true)
+  act(() => { state.set({ ...state.getSnapshot(), automation: { target, sessionId: 'session', status: 'taken-over', storage: 'temporary' } }) })
+  fireEvent.click(mounted.view.getByRole('button', { name: zh['automation.resume'] }))
+  expect(control).toHaveBeenCalledWith('resume')
+})

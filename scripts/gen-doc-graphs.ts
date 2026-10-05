@@ -108,6 +108,30 @@ const GROUP_ORDER = [
 
 const SERVICE_ROLES: ServiceRole[] = [
   {
+    key: 'desktopBrowser',
+    pkg: 'browser-use',
+    title: 'Owned Desktop browser guest requests',
+    mode: 'seam',
+    consumers: ['experimental-browser-use-electron'],
+    note: 'The Desktop Host supplies a finite request bridge to the same sidebar guest, scoped by Session and activation; it does not replace the provider registry.',
+  },
+  {
+    key: 'browserInteraction',
+    pkg: 'experimental-browser-use-runtime',
+    title: 'Trusted interaction controls',
+    mode: 'seam',
+    consumers: ['experimental-browser-use-playwright-mcp', 'experimental-computer-use-cua-driver-native'],
+    note: 'Providers expose owned work-segment stop, takeover, and resume controls to the Desktop Host without adding a common registry action API.',
+  },
+  {
+    key: 'computerAuthorization',
+    pkg: 'computer-use',
+    title: 'One-shot native Computer Use authorization',
+    mode: 'seam',
+    consumers: ['experimental-computer-use-cua-driver-native'],
+    note: 'The Desktop Host binds trusted user decisions to a pending Session, activation, and request digest; missing or expired decisions cannot grant access.',
+  },
+  {
     key: 'hmr',
     pkg: 'hmr',
     title: 'Serialized module and configuration reloads',
@@ -177,8 +201,8 @@ const SERVICE_ROLES: ServiceRole[] = [
     pkg: 'browser-use',
     title: 'Browser-use provider registration',
     mode: 'seam',
-    implementations: ['experimental-browser-use-playwright-mcp', 'experimental-browser-use-chrome-devtools-mcp', 'experimental-browser-use-stagehand-native'],
-    consumers: ['experimental-browser-use-playwright-mcp', 'experimental-browser-use-chrome-devtools-mcp', 'experimental-browser-use-stagehand-native'],
+    implementations: ['experimental-browser-use-playwright-mcp', 'experimental-browser-use-chrome-devtools-mcp', 'experimental-browser-use-stagehand-native', 'experimental-browser-use-electron'],
+    consumers: ['experimental-browser-use-playwright-mcp', 'experimental-browser-use-chrome-devtools-mcp', 'experimental-browser-use-stagehand-native', 'experimental-browser-use-electron'],
     note: 'One provider-owned name per service instance. Providers own their tools and browser resources per live Session; the shared service has no browser operation API.',
   },
   {

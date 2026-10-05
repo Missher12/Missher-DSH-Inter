@@ -23,6 +23,10 @@
     "./mcp": {
       "types": "./lib/types/mcp.d.ts",
       "default": "./lib/types/mcp.js"
+    },
+    "./control": {
+      "types": "./lib/types/control.d.ts",
+      "default": "./lib/types/control.js"
     }
   },
   "files": [

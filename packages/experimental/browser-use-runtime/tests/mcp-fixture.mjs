@@ -50,7 +50,17 @@ lines.on('line', line => {
       record('call', { name: request.params.name })
       if (request.params.name === 'disconnect') process.exit(0)
       counter += 1
-      reply(request.id, { content: [{ type: 'text', text: `Visit ${counter}: ${request.params.arguments.label}` }], structuredContent: { counter, pid: process.pid } })
+      {
+        const respond = () => reply(request.id, { content: [{ type: 'text', text: `Visit ${counter}: ${request.params.arguments.label}` }], structuredContent: { counter, pid: process.pid, cwd: process.cwd() } })
+        if (mode === 'operation-gate' && !existsSync(join(root, 'release-call'))) {
+          const watcher = watch(root, () => {
+            if (!existsSync(join(root, 'release-call'))) return
+            watcher.close()
+            respond()
+          })
+          if (existsSync(join(root, 'release-call'))) { watcher.close(); respond() }
+        } else respond()
+      }
       break
     case 'resources/list':
       record('resource', { name: request.method })

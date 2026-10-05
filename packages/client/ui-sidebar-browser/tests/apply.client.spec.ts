@@ -56,7 +56,7 @@ async function boot(platform: ShortcutPlatform = 'macos', runtime: 'desktop' | '
   const openTabs = createSnapshotStore<readonly { sessionId: string; tabId: TabId }[]>([])
   const target = { sessionId: 'session', paneId: 'pane' }
   const sidebar = { openTabs, commandTarget: vi.fn<() => typeof target | undefined>(() => target),
-    openTabFromTarget: vi.fn() }
+    openTabFromTarget: vi.fn(), openTabIn: vi.fn() }
   const registry = new ShortcutRegistry(runtime, platform)
   ctx.provide('sidebarRight', sidebar as never)
   ctx.provide('shortcuts', { register: (command: ShortcutCommand) => registry.register(command) } as never)
@@ -174,4 +174,23 @@ describe('ui-sidebar-browser apply', () => {
     expect(registered).toEqual([])
     expect(dictionaries.size).toBe(0)
   })
+})
+
+it('opens each main-created model reservation in its owning session and removes the listener on unload', async () => {
+  const listeners = new Set<(request: import('../src/types.ts').DesktopBrowserModelOpen) => void>()
+  const bridge: DesktopBrowserBridge = {
+    automationVersion: 1,
+    acquire: vi.fn(async () => ({ lease: 'manual' as DesktopBrowserLeaseId, partition: 'manual' })),
+    release: vi.fn(async () => {}), onOpenRequested: () => () => {},
+    onModelOpen(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
+  }
+  vi.stubGlobal('dshDesktop', { protocolVersion: 1, browser: bridge })
+  const h = await boot()
+  const request = { sessionId: 'model-session', lease: 'model-lease' as DesktopBrowserLeaseId, url: 'https://fixture.example/' }
+  for (const listener of listeners) { listener(request); listener(request) }
+  expect(h.sidebar.openTabIn).toHaveBeenCalledExactlyOnceWith('model-session', 'browser', {
+    params: { url: request.url, automationLease: request.lease }, revealIfOpened: false,
+  })
+  await h.fiber.dispose()
+  expect(listeners.size).toBe(0)
 })

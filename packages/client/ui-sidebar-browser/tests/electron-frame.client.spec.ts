@@ -49,3 +49,31 @@ it('clears a failed load when the main page retries without a toolbar command', 
     host.remove()
   }
 })
+
+it('claims the model-owned guest, projects only its state, and releases subscriptions with the tab', async () => {
+  const { electronFixture } = await import('./electron-harness.client.ts')
+  const state: import('@deepseek-ai/dsh-browser-use/desktop').DesktopBrowserState = {
+    target: 'model-guest' as import('@deepseek-ai/dsh-browser-use/desktop').BrowserTargetId,
+    sessionId: 'owning-session', status: 'ready', storage: 'temporary',
+  }
+  const fixture = electronFixture(undefined, state)
+  try {
+    fixture.mount()
+    fixture.frame.loadUrl({ kind: 'https', url: 'https://example.test/', title: 'Example' })
+    await fixture.guest()
+    expect(fixture.bridge.claim).toHaveBeenCalledExactlyOnceWith(fixture.reservation.lease)
+    expect(fixture.bridge.acquire).not.toHaveBeenCalled()
+    expect(fixture.workspace).not.toHaveBeenCalled()
+    expect(fixture.frame.getSnapshot().automation).toEqual(state)
+    for (const listener of fixture.states) listener({ ...state, target: 'other-guest' as typeof state.target, status: 'taken-over' })
+    expect(fixture.frame.getSnapshot().automation?.status).toBe('ready')
+    for (const listener of fixture.states) listener({ ...state, status: 'taken-over' })
+    expect(fixture.frame.getSnapshot().automation?.status).toBe('taken-over')
+    await fixture.frame.control?.('resume')
+    expect(fixture.bridge.control).toHaveBeenCalledWith(fixture.reservation.lease, 'resume')
+  } finally {
+    await fixture.dispose()
+  }
+  expect(fixture.states.size).toBe(0)
+  expect(fixture.bridge.release).toHaveBeenCalledExactlyOnceWith(fixture.reservation.lease)
+})

@@ -7,19 +7,24 @@ import { ComputerUseProviderName } from '@deepseek-ai/dsh-computer-use/brand'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as NativeProvider from '../src/index.ts'
 import { catalog, fixture, resetFixture } from './fixtures/cua-driver.ts'
 
 vi.mock('@trycua/cua-driver', async () => import('./fixtures/cua-driver.ts'))
 
 let ctx: Context
+let agent: Agent
 
 beforeEach(async () => {
   resetFixture()
   ctx = new Context()
   await ctx.plugin(ComputerUseRegistry)
-  await ctx.plugin(SystemPrompt)
-  await ctx.plugin(ToolRuntime)
+  await mountAgentLoopTestDependencies(ctx)
+  const harness = await mountAgentLoopTestHarness(ctx)
+  agent = await harness.create(SessionId('native-owner'))
 })
 
 afterEach(async () => {
@@ -28,6 +33,7 @@ afterEach(async () => {
 
 function execute(rawName: string, args: Record<string, unknown> = {}) {
   return ctx.tools.execute({
+    agent,
     name: `cua_driver_native__${rawName}`,
     callId: ToolCallId('native-test'),
     arguments: args,
@@ -41,9 +47,10 @@ describe('Cua Driver native provider', () => {
     await fiber
     expect(ctx.computerUse.providerName).toBe('cua-driver-native')
     expect(ctx.tools.schemas().map(tool => tool.name)).toEqual(catalog.tools.map(tool => `cua_driver_native__${tool.name}`))
+    await execute('get_window_state', { pid: 9, window_id: 7 })
     const result = await execute('click', { pid: 9, window_id: 7 })
     expect(result.isError).toBe(false)
-    expect(fixture.calls).toMatchObject([{ name: 'click', args: { pid: 9, window_id: 7 } }])
+    expect(fixture.calls).toContainEqual(expect.objectContaining({ name: 'click', args: { pid: 9, window_id: 7 } }))
     await fiber.dispose()
     expect(ctx.tools.schemas()).toEqual([])
     expect(ctx.computerUse.providerName).toBeUndefined()
@@ -88,8 +95,9 @@ describe('Cua Driver native provider', () => {
   })
 
   it('preserves native tool refusals as model-visible errors', async () => {
-    fixture.call = async () => ({ isError: true, content: [{ type: 'text', text: 'background_unavailable' }] })
     await ctx.plugin(NativeProvider)
+    await execute('get_window_state', { pid: 9, window_id: 7 })
+    fixture.call = async () => ({ isError: true, content: [{ type: 'text', text: 'background_unavailable' }] })
     const result = await execute('click', { pid: 9, window_id: 7 })
     expect(result.isError).toBe(true)
     expect(result.content).toEqual([{ type: 'text', text: 'Error: background_unavailable' }])
@@ -142,7 +150,7 @@ describe('Cua Driver native provider', () => {
     }
     const fiber = ctx.plugin(NativeProvider)
     await fiber
-    const result = execute('click', { pid: 9, window_id: 7 })
+    const result = execute('get_window_state', { pid: 9, window_id: 7 })
     await called.promise
     const disposal = fiber.dispose()
     try {
@@ -190,7 +198,8 @@ describe('Cua Driver native provider', () => {
     await vi.waitFor(() => { expect(fixture.creates).toBe(2) })
     expect(fixture.shutdowns).toBe(1)
     expect(fixture.destroys).toBe(1)
-    expect((await execute('check_permissions')).isError).toBe(false)
+    expect((await execute('check_permissions')).isError).toBe(true)
+    expect((await ctx.tools.execute({ name: 'cua_driver_native__check_permissions', callId: ToolCallId('new-runtime-check'), arguments: {}, signal: new AbortController().signal })).isError).toBe(false)
     await fiber.dispose()
     expect(fixture.shutdowns).toBe(2)
     expect(fixture.destroys).toBe(2)
@@ -223,4 +232,70 @@ describe('Cua Driver native provider', () => {
     expect(fixture.destroys).toBe(0)
     expect(() => ctx.computerUse.register(ComputerUseProviderName('replacement'))).toThrow('already registered')
   })
+})
+
+it('keeps SDK session, configuration, install, recording and replay management out of model tools', async () => {
+  const managed = [
+    'set_config', 'install_ffmpeg', 'replay_trajectory',
+    'start_session', 'escalate_session', 'end_session', 'get_session', 'list_sessions', 'get_session_state',
+    'start_recording', 'stop_recording', 'get_recording_state',
+  ]
+  fixture.list = async () => JSON.stringify({ tools: [
+    ...catalog.tools,
+    ...managed.map(name => ({ name, inputSchema: { type: 'object', properties: {} } })),
+  ] })
+  await ctx.plugin(NativeProvider)
+  expect(ctx.tools.schemas().map(tool => tool.name)).toEqual(catalog.tools.map(tool => `cua_driver_native__${tool.name}`))
+  for (const name of managed) expect((await execute(name)).isError).toBe(true)
+  expect(fixture.calls).toHaveLength(0)
+})
+
+it('omits typed browser and legacy page tools when the profile disables browser tools', async () => {
+  fixture.list = async () => JSON.stringify({ tools: [
+    ...catalog.tools,
+    { name: 'get_browser_state', inputSchema: { type: 'object', properties: {} } },
+    { name: 'browser_prepare', inputSchema: { type: 'object', properties: {} } },
+    { name: 'page', inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['get_text', 'query_dom', 'execute_javascript'] } }, required: ['action'] } },
+  ] })
+  await ctx.plugin(NativeProvider, { browserTools: false })
+  expect(ctx.tools.schemas().map(tool => tool.name)).toEqual(catalog.tools.map(tool => `cua_driver_native__${tool.name}`))
+  expect((await execute('get_browser_state')).isError).toBe(true)
+  expect((await execute('page', { action: 'get_text' })).isError).toBe(true)
+  expect(fixture.calls).toHaveLength(0)
+})
+
+it.each(['get_browser_state', 'browser_prepare', 'page'])('rejects native %s access while Browser Use owns browser interaction', async (name) => {
+  const { default: BrowserUseRegistry } = await import('@deepseek-ai/dsh-browser-use')
+  const { BrowserUseProviderName } = await import('@deepseek-ai/dsh-browser-use/brand')
+  await ctx.plugin(BrowserUseRegistry)
+  ctx.browserUse.register(BrowserUseProviderName('fixture-browser'))
+  fixture.list = async () => JSON.stringify({ tools: [{ name, inputSchema: { type: 'object', properties: {} } }] })
+  await ctx.plugin(NativeProvider)
+  const result = await execute(name)
+  expect(result.isError).toBe(true)
+  if (!result.isError) throw new Error('Competing browser access was admitted')
+  expect(result.error.info?.code).toBe('CU_BROWSER_PROVIDER_CONFLICT')
+  expect(fixture.calls).toHaveLength(0)
+})
+
+it('records a structured driver refusal as an error even when its MCP envelope reports success', async () => {
+  await ctx.plugin(NativeProvider)
+  fixture.nativeResult = { errorCode: 'browser_consent_required', isError: false }
+  const result = await execute('check_permissions')
+  expect(result.isError).toBe(true)
+  if (!result.isError) throw new Error('Native refusal was treated as success')
+  expect({ info: result.error.info, content: result.content }).toMatchInlineSnapshot(`
+    {
+      "content": [
+        {
+          "text": "Error: Browser access needs approval in the desktop authorization dialog. A model or page cannot approve it.",
+          "type": "text",
+        },
+      ],
+      "info": {
+        "code": "browser_consent_required",
+        "name": "CuaDriverRefusalError",
+      },
+    }
+  `)
 })

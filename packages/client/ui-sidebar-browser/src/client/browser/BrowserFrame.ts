@@ -1,6 +1,11 @@
 /** Carrier-neutral page navigation and observable state. */
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { BrowserTarget } from './url.ts'
+import type { DesktopBrowserState } from '@deepseek-ai/dsh-browser-use/desktop'
+import type { DesktopBrowserBridge } from '../../types.ts'
+
+/** Explicit user gestures supported by the optional trusted Desktop browser bridge. */
+export type BrowserControlAction = Parameters<NonNullable<DesktopBrowserBridge['control']>>[1]
 
 /** A loading failure, optionally carrying the underlying browser's diagnostic. */
 export interface BrowserLoadError {
@@ -18,6 +23,10 @@ export interface BrowserFrameState {
   readonly error: BrowserLoadError | undefined
   /** Undefined when this provider does not expose a sandbox control. */
   readonly sandboxEnabled: boolean | undefined
+  /** Main-process projection; absent for ordinary manually opened tabs. */
+  readonly automation?: DesktopBrowserState
+  /** A control request failed; details stay in diagnostics rather than page UI. */
+  readonly automationError?: boolean
 }
 
 /** Optional iframe policy control, not an Electron process-sandbox switch. */
@@ -29,6 +38,8 @@ export interface BrowserSandboxControl {
 /** Navigation owns page lifetime; mounting and hiding belong to BrowserPresentation. */
 export interface BrowserFrame extends HostObservable<BrowserFrameState> {
   readonly sandbox?: BrowserSandboxControl
+  /** @param action - explicit user gesture. @returns after the trusted carrier settles the request. */
+  control?(action: BrowserControlAction): Promise<void>
   /** @param target - validated HTTP(S) address; loading failures are published in state. */
   loadUrl(target: BrowserTarget): void
   /** Move backward when the provider reports an available entry. */

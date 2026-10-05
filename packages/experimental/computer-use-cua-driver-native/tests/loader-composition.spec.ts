@@ -102,6 +102,7 @@ it('loads from cordis.yml and logs the native screenshot before the next model r
   stop()
 
   expect(model.requests).toHaveLength(2)
+  expect(model.requests[0]?.messages.find(message => message.role === 'system')?.content).toMatchSnapshot()
   expect(JSON.stringify(model.requests[0])).toContain('cua_driver_native__get_window_state')
   expect(JSON.stringify(model.requests[0])).toContain('Cua Driver native computer-use tools operate the host desktop.')
   const toolEvent = agent.session.snapshotEvents().find(event => event.type === 'tool/result')

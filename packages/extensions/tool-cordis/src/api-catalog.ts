@@ -549,6 +549,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'browserInteraction',
+    summary: 'Optional trusted consumer; providers retain state and resource ownership.',
+    description: 'Optional trusted consumer; providers retain state and resource ownership.',
+    methods: [
+      {
+        signature: 'register(agent: Agent, control: BrowserInteractionController): () => void',
+        description: 'Publish controls for one exact live activation, rejecting duplicate ownership.',
+        parameters: [{ name: 'agent', description: 'live owner whose identity must be checked by every consumer action.' }, { name: 'control', description: 'provider controls, never exposed directly to model tool parameters.' }],
+        returns: 'a disposer that removes only this registration.',
+      },
+    ],
+  },
+  {
     key: 'browserUse',
     summary: 'Owns one optional provider registration in the shared browser-use service.',
     description: 'Owns one optional provider registration in the shared browser-use service.',
@@ -671,6 +684,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'start', description: 'first surface seq, inclusive.' }, { name: 'end', description: 'last surface seq, inclusive.' }, { name: 'agent', description: 'context whose session is mutated and whose routing options guide summarization.' }, { name: 'signal', description: 'optional cancellation; model-backed implementations must forward it.' }],
         returns: 'the appended event seqs, summary, replaced range, and token accounting.',
         throws: ['when compaction is active or the range is missing, reversed, or unbalanced.'],
+      },
+    ],
+  },
+  {
+    key: 'computerAuthorization',
+    summary: 'Trusted Host-to-Desktop adapter; it is independent of provider registration.',
+    description: 'Trusted Host-to-Desktop adapter; it is independent of provider registration.',
+    methods: [
+      {
+        signature: 'request(request: ComputerAuthorizationRequest, signal: AbortSignal): Promise<ComputerAuthorizationDecision>',
+        description: 'Ask the user about exactly one attested browser/profile attachment.',
+        parameters: [{ name: 'request', description: 'SDK digest, expiry, activation, and trusted display fields.' }, { name: 'signal', description: 'cancellation invalidates any late approval.' }],
+        returns: 'a single decision; dismissal, expiry, and cancellation never allow.',
+      },
+      {
+        signature: 'revoke(activationId: ComputerActivationId): Promise<void>',
+        description: 'Cancel pending requests for an activation; native grants are revoked by SDK session close.',
+        parameters: [{ name: 'activationId', description: 'exact Host-lifetime activation being retired.' }],
+        returns: 'after the adapter can no longer approve its pending requests.',
       },
     ],
   },
@@ -949,6 +981,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Prepare every currently registered field from one immutable base request. Preparation failures reject before HTTP dispatch. Field values are cloned and frozen; providers retain no mutable alias to the outgoing request.',
         parameters: [{ name: 'request', description: 'exact serialized request facts before extension fields.' }],
         returns: 'detached fields and their idempotent joint acceptance transaction.',
+      },
+    ],
+  },
+  {
+    key: 'desktopBrowser',
+    summary: 'Trusted Host-to-Desktop adapter.',
+    description: 'Trusted Host-to-Desktop adapter.',
+    methods: [
+      {
+        signature: 'request(request: DesktopBrowserRequest, signal: AbortSignal): Promise<DesktopBrowserResult>',
+        description: 'Execute one finite operation against the requesting activation\'s owned guest.',
+        parameters: [{ name: 'request', description: 'exact owner and finite operation.' }, { name: 'signal', description: 'cancellation.' }],
+        returns: 'observed result; dispatched input is never rolled back.',
       },
     ],
   },
@@ -4798,6 +4843,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type BrandedNumber<B extends string> = number & {\n    readonly [BRAND]: B;\n};',
   },
   {
+    name: 'BrowserActivationId',
+    declaration: 'export type BrowserActivationId = Branded<\'BrowserActivationId\'>;',
+  },
+  {
+    name: 'BrowserInteractionController',
+    declaration: 'export interface BrowserInteractionController {\n    state(): BrowserInteractionState;\n    stop(kind: \'stopped\' | \'taken-over\'): Promise<void>;\n    resume(): Promise<void>;\n    subscribe(listener: () => void): () => void;\n}',
+  },
+  {
+    name: 'BrowserInteractionState',
+    declaration: 'export interface BrowserInteractionState {\n    provider: string;\n    status: \'initializing\' | \'ready\' | \'running\' | \'stopping\' | \'stopped\' | \'taken-over\' | \'disconnected\' | \'blocked\';\n    mode: \'isolated\' | \'attached\' | \'ephemeral\' | \'persistent\';\n    operation?: string;\n    reason?: string;\n}',
+  },
+  {
+    name: 'BrowserOwner',
+    declaration: 'export interface BrowserOwner {\n    readonly sessionId: string;\n    readonly activationId: BrowserActivationId;\n}',
+  },
+  {
+    name: 'BrowserSnapshotId',
+    declaration: 'export type BrowserSnapshotId = Branded<\'BrowserSnapshotId\'>;',
+  },
+  {
+    name: 'BrowserTargetId',
+    declaration: 'export type BrowserTargetId = Branded<\'BrowserTargetId\'>;',
+  },
+  {
     name: 'BrowserUseProviderName',
     declaration: 'export type BrowserUseProviderName = Branded<\'BrowserUseProviderName\'>;',
   },
@@ -4880,6 +4949,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CompositionRowEnablement',
     declaration: 'export type CompositionRowEnablement = boolean | \'conditional\';',
+  },
+  {
+    name: 'ComputerActivationId',
+    declaration: 'export type ComputerActivationId = string & Branded<\'ComputerActivationId\'>;',
+  },
+  {
+    name: 'ComputerAuthorizationDecision',
+    declaration: 'export type ComputerAuthorizationDecision = \'allow\' | \'deny\' | \'cancel\';',
+  },
+  {
+    name: 'ComputerAuthorizationRequest',
+    declaration: 'export interface ComputerAuthorizationRequest {\n    requestId: ComputerAuthorizationRequestId;\n    sessionId: string;\n    activationId: ComputerActivationId;\n    requestDigest: string;\n    expiresAt: number;\n    summary: string;\n    resourceJson: string;\n}',
+  },
+  {
+    name: 'ComputerAuthorizationRequestId',
+    declaration: 'export type ComputerAuthorizationRequestId = string & Branded<\'ComputerAuthorizationRequestId\'>;',
   },
   {
     name: 'ComputerUseProviderName',
@@ -5124,6 +5209,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DeliveryRetentionBounds',
     declaration: 'export interface DeliveryRetentionBounds {\n    readonly days: number;\n    readonly records: number;\n}',
+  },
+  {
+    name: 'DesktopBrowserOperation',
+    declaration: 'export type DesktopBrowserOperation = {\n    readonly action: \'open\';\n    readonly url: string;\n} | {\n    readonly action: \'list\';\n} | {\n    readonly action: \'release\';\n} | {\n    readonly action: \'observe\';\n    readonly target: BrowserTargetId;\n} | {\n    readonly action: \'screenshot\';\n    readonly target: BrowserTargetId;\n} | {\n    readonly action: \'close\';\n    readonly target: BrowserTargetId;\n} | {\n    readonly action: \'navigate\';\n    readonly target: BrowserTargetId;\n    readonly url: string;\n} | {\n    readonly action: \'click\';\n    readonly target: BrowserTargetId;\n    readonly snapshot: BrowserSnapshotId;\n    readonly element: string;\n} | {\n    readonly action: \'upload\';\n    readonly target: BrowserTargetId;\n    readonly snapshot: BrowserSnapshotId;\n    readonly element: string;\n} | {\n    readonly action: \'fill\';\n    readonly target: BrowserTargetId;\n    readonly snapshot: BrowserSnapshotId;\n    readonly element: string;\n    readonly text: string;\n} | {\n    readonly action: \'press\';\n    readonly target: BrowserTargetId;\n    readonly snapshot: BrowserSnapshotId;\n    readonly key: string;\n} | {\n    readonly action: \'scroll\';\n    readonly target: BrowserTargetId;\n    readonly snapshot: BrowserSnapshotId;\n    readonly delta: number;\n} | {\n    readonly action: \'wait\';\n    readonly target: BrowserTargetId;\n    readonly text: string;\n    readonly timeoutMs: number;\n};',
+  },
+  {
+    name: 'DesktopBrowserRequest',
+    declaration: 'export interface DesktopBrowserRequest {\n    readonly owner: BrowserOwner;\n    readonly operation: DesktopBrowserOperation;\n}',
+  },
+  {
+    name: 'DesktopBrowserResult',
+    declaration: 'export interface DesktopBrowserResult {\n    readonly status: \'observed\' | \'delivered\' | \'closed\' | \'cancelled\' | \'uncertain\' | \'denied\' | \'stale-target\' | \'stale-snapshot\' | \'unavailable\';\n    readonly message: string;\n    readonly target?: BrowserTargetId;\n    readonly snapshot?: BrowserSnapshotId;\n    readonly data?: unknown;\n    readonly image?: {\n        readonly data: string;\n        readonly mimeType: \'image/png\';\n    };\n}',
   },
   {
     name: 'DeveloperMessage',

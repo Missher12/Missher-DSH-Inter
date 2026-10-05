@@ -430,6 +430,12 @@ importers:
       node-addon-require-builtin:
         specifier: ^0.1.6
         version: 0.1.6
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../packages/browser-use/browser-use
+      '@deepseek-ai/dsh-computer-use':
+        specifier: workspace:*
+        version: link:../../packages/computer-use/computer-use
     devDependencies:
       '@agentclientprotocol/sdk':
         specifier: 1.4.0
@@ -687,6 +693,15 @@ importers:
       vite:
         specifier: ^6.0.0
         version: 6.4.3(@types/node@22.20.0)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../packages/browser-use/browser-use
+      '@deepseek-ai/dsh-computer-use':
+        specifier: workspace:*
+        version: link:../../packages/computer-use/computer-use
+      '@deepseek-ai/dsh-experimental-browser-use-runtime':
+        specifier: workspace:*
+        version: link:../../packages/experimental/browser-use-runtime
 
   apps/desktop-host:
     dependencies:
@@ -735,6 +750,12 @@ importers:
       koffi:
         specifier: ^3.1.0
         version: 3.1.1
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../packages/browser-use/browser-use
+      '@deepseek-ai/dsh-computer-use':
+        specifier: workspace:*
+        version: link:../../packages/computer-use/computer-use
     devDependencies:
       '@deepseek-ai/cordis-plugin-include':
         specifier: workspace:~
@@ -745,6 +766,9 @@ importers:
       '@deepseek-ai/dsh-skill':
         specifier: workspace:*
         version: link:../../packages/skill/skill
+      '@deepseek-ai/dsh-experimental-browser-use-runtime':
+        specifier: workspace:*
+        version: link:../../packages/experimental/browser-use-runtime
 
   apps/web:
     devDependencies:
@@ -5357,6 +5381,9 @@ importers:
       react-dom:
         specifier: ^18.2.0
         version: 18.3.1(react@18.3.1)
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../browser-use/browser-use
 
   packages/client/ui-sidebar-documentpreview:
     dependencies:
@@ -7885,6 +7912,12 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
+      '@deepseek-ai/dsh-experimental-browser-use-runtime':
+        specifier: workspace:*
+        version: link:../browser-use-runtime
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../browser-use/browser-use
 
   packages/experimental/inspector:
     dependencies:
@@ -14709,6 +14742,51 @@ importers:
       vue:
         specifier: 3.5.39
         version: 3.5.39(typescript@6.0.3)
+
+  packages/experimental/browser-use-electron:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:*
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-browser-use':
+        specifier: workspace:*
+        version: link:../../browser-use/browser-use
+      '@deepseek-ai/dsh-mcp-client':
+        specifier: workspace:*
+        version: link:../../mcp/mcp-client
+      '@deepseek-ai/dsh-tools':
+        specifier: workspace:*
+        version: link:../../core/tools
+      '@deepseek-ai/dsh-system-prompt':
+        specifier: workspace:*
+        version: link:../../core/system-prompt
+      '@deepseek-ai/dsh-agent-loop-testkit':
+        specifier: workspace:*
+        version: link:../../test-support/agent-loop-testkit
+      '@deepseek-ai/cordis-plugin-loader':
+        specifier: workspace:~
+        version: link:../../../vendor/loader
+      '@deepseek-ai/cordis-plugin-include':
+        specifier: workspace:~
+        version: link:../../../vendor/include
+      '@deepseek-ai/dsh-attachment-local':
+        specifier: workspace:*
+        version: link:../../attachment/attachment-local
+      '@deepseek-ai/dsh-llm':
+        specifier: workspace:*
+        version: link:../../llm/llm
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:*
+        version: link:../../session/session
+      '@deepseek-ai/dsh-session-projection':
+        specifier: workspace:*
+        version: link:../../session/session-projection
+      '@deepseek-ai/dsh-agent-loop':
+        specifier: workspace:*
+        version: link:../../core/agent-loop
 
 packages:
 

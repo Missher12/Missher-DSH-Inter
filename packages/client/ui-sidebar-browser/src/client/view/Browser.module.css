@@ -245,3 +245,22 @@
   flex: 0 0 auto;
   margin-right: 4px;
 }
+
+.automation {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.automationStatus, .automationActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.automationActions {
+  margin-top: 6px;
+}

@@ -205,6 +205,20 @@ describe('syncTools', () => {
     expect(ctx.tools.get('mcp__web__search')).toBeDefined()
   })
 
+  it('never registers excluded upstream tools, including after catalog refresh', async () => {
+    const client = createMockClient([
+      { name: 'read', inputSchema: { type: 'object' } },
+      { name: 'unsafe', inputSchema: { type: 'object' } },
+    ])
+    const options = { ...defaultOpts, excludedTools: ['unsafe'] }
+    const first = await syncTools(client as never, ctx, options, new Map())
+    expect(ctx.tools.schemas().map(tool => tool.name)).toEqual(['mcp__srv__read'])
+    expect(ctx.tools.get('mcp__srv__unsafe')).toBeUndefined()
+    const refreshed = await syncTools(client as never, ctx, options, first)
+    expect(refreshed.size).toBe(1)
+    expect(ctx.tools.get('mcp__srv__unsafe')).toBeUndefined()
+  })
+
   it('coexists with a native tool of the same raw name', async () => {
     ctx.tools.register({
       name: 'search',

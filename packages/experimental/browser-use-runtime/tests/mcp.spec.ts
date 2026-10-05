@@ -21,6 +21,8 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import Projections from '@deepseek-ai/dsh-session-projection'
 import { bindScopeParent } from '@deepseek-ai/dsh-scope'
 import { BrowserMcpConfig, mountSessionMcp, validateBrowserMcpConfig } from '../src/mcp.ts'
+import type { SessionMcpOptions } from '../src/mcp.ts'
+import type { BrowserInteractionController } from '../src/control.ts'
 
 const fixture = fileURLToPath(new URL('./mcp-fixture.mjs', import.meta.url))
 const roots: string[] = []
@@ -61,7 +63,9 @@ class PresentationRuntime extends PtcRuntime {
   run(): Promise<never> { return Promise.reject(new Error('Unexpected PTC execution in a presentation test')) }
 }
 
-async function load(exclusive = false, mode?: string, toolCallTimeoutMs?: number, toolOrder?: string[]) {
+async function load(
+  exclusive = false, mode?: string, toolCallTimeoutMs?: number, toolOrder?: string[], policy: Partial<SessionMcpOptions> = {},
+) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-browser-mcp-'))
   roots.push(root)
   const model = new FixtureModel()
@@ -70,7 +74,7 @@ async function load(exclusive = false, mode?: string, toolCallTimeoutMs?: number
     ['sessions', Sessions], ['agents', Agents], ['loop', AgentLoop], ['projections', Projections],
     ['model', { inject: ['llm'], apply(ctx: Context) { ctx.effect(() => ctx.llm.registerAdapter(['fixture'], model)) } }],
     ['browser', { inject: ['browserUse', 'agents', 'tools', 'systemPrompt'], apply(ctx: Context) {
-      mountSessionMcp(ctx, { name: 'browser-fixture', exclusive, command: process.execPath, args: [fixture, root, ...mode === undefined ? [] : [mode]], ...toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs, env: {} } })
+      mountSessionMcp(ctx, { name: 'browser-fixture', exclusive, command: process.execPath, args: [fixture, root, ...mode === undefined ? [] : [mode]], ...toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs, env: {} }, ...policy })
     } }],
   ])
   const configPath = join(root, 'cordis.yml')
@@ -573,4 +577,53 @@ describe('Session MCP Loader composition', () => {
     expect((await execute(ctx, existing.agent)).isError).toBe(true)
     expect((await execute(ctx, future.agent)).isError).toBe(false)
   })
+})
+
+it('trusted takeover drains the active call, blocks queued calls, and requires observation after resume', async () => {
+  const { ctx, root, browser } = await load(false, 'operation-gate', undefined, undefined, { observationTools: ['visit'] })
+  const controls = new Map<Agent, BrowserInteractionController>()
+  ctx.provide('browserInteraction', { register(agent, control) { controls.set(agent, control); return () => { controls.delete(agent) } } })
+  const owner = await ctx.agents.create({ sessionId: SessionId('controlled-browser') })
+  const control = controls.get(owner.agent)!
+  expect(control.state()).toMatchObject({ status: 'ready', mode: 'isolated' })
+  const changes: string[] = []
+  const unsubscribe = control.subscribe(() => { changes.push(control.state().status) })
+  const running = execute(ctx, owner.agent)
+  await vi.waitFor(async () => { expect((await events(root)).filter(event => event.event === 'call')).toHaveLength(1) })
+  const queued = execute(ctx, owner.agent)
+  const takeover = control.stop('taken-over')
+  expect(control.state().status).toBe('stopping')
+  await expect(control.resume()).rejects.toThrow('settle')
+  expect((await execute(ctx, owner.agent)).isError).toBe(true)
+  await writeFile(join(root, 'release-call'), '')
+  expect((await running).isError).toBe(false)
+  expect((await queued).isError).toBe(true)
+  await takeover
+  expect(control.state().status).toBe('taken-over')
+  expect((await events(root)).filter(event => event.event === 'call')).toHaveLength(1)
+  await control.resume()
+  expect(JSON.stringify((await execute(ctx, owner.agent, 'mcp__browser-fixture__disconnect')).content)).toContain('Observe the current browser')
+  expect((await execute(ctx, owner.agent)).isError).toBe(false)
+  unsubscribe()
+  expect(changes).toContain('running')
+  expect(changes).toContain('taken-over')
+  await browser.dispose()
+  expect(controls.size).toBe(0)
+  await owner.dispose()
+  await expect(control.resume()).rejects.toThrow('no longer available')
+})
+
+it('keeps MCP temporary files away from Session cwd and removes them with the activation', async () => {
+  const { ctx, root } = await load(false, undefined, undefined, undefined, { privateWorkspace: true, deniedTools: ['disconnect'] })
+  const owner = await ctx.agents.create({ sessionId: SessionId('private-files'), meta: { cwd: root } })
+  expect(ctx.tools.schemas(owner.agent).map(tool => tool.name)).toEqual([TOOL])
+  expect((await execute(ctx, owner.agent, 'mcp__browser-fixture__disconnect')).isError).toBe(true)
+  const result = await execute(ctx, owner.agent)
+  const value = result.value as { structuredContent: { cwd: string } }
+  const cwd = value.structuredContent.cwd
+  expect(cwd).not.toBe(root)
+  expect(cwd).toContain('dsh-browser-')
+  await writeFile(join(cwd, 'output'), 'temporary')
+  await owner.dispose()
+  await expect(readFile(join(cwd, 'output'))).rejects.toMatchObject({ code: 'ENOENT' })
 })

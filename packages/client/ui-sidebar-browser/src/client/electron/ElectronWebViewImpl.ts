@@ -1,8 +1,8 @@
 /** Electron navigation and guest lifetime, independent from DOM placement. */
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { DesktopBrowserBridge, DesktopBrowserLeaseId } from '../../types.ts'
+import type { DesktopBrowserBridge, DesktopBrowserLeaseId, DesktopBrowserReservation } from '../../types.ts'
 import type { ElectronWebviewPresentation, WebviewElement } from './ElectronWebviewPresentation.ts'
-import { emptyBrowserFrame, type BrowserFrame, type BrowserFrameState, type BrowserLoadError } from '../browser/BrowserFrame.ts'
+import { emptyBrowserFrame, type BrowserControlAction, type BrowserFrame, type BrowserFrameState, type BrowserLoadError } from '../browser/BrowserFrame.ts'
 import type { BrowserPageOptions } from '../browser/BrowserPage.ts'
 import { browserAddressCheckpoint, currentBrowserTarget } from '../browser/BrowserPersistence.ts'
 import { parseBrowserAddress, type BrowserTarget } from '../browser/url.ts'
@@ -108,6 +108,21 @@ export class ElectronWebViewImpl implements BrowserFrame {
     } else this.navigate('reload')
   }
 
+  /** @param action - trusted user gesture for this exact model-created tab. @returns after control settles. */
+  async control(action: BrowserControlAction): Promise<void> {
+    if (this.lifetime.signal.aborted || this.lease === undefined || this.options.automationLease === undefined) return
+    try {
+      if (this.bridge.control === undefined) throw new Error('Desktop browser controls are unavailable')
+      await this.bridge.control(this.lease, action)
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- IPC completion can race frame disposal.
+      if (!this.lifetime.signal.aborted) this.store.set({ ...this.store.getSnapshot(), automationError: false })
+    } catch (error) {
+      console.error('Desktop browser control failed', error)
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- IPC rejection can race frame disposal.
+      if (!this.lifetime.signal.aborted) this.store.set({ ...this.store.getSnapshot(), automationError: true })
+    }
+  }
+
   /** @returns after pending initialization and the owned guest have been released. */
   dispose(): Promise<void> {
     if (this.disposal !== undefined) return this.disposal
@@ -142,14 +157,35 @@ export class ElectronWebViewImpl implements BrowserFrame {
   }
 
   private async createGuest(attachmentSignal: AbortSignal): Promise<void> {
-    this.workspaceKey ??= await this.workspace(attachmentSignal)
-    if (attachmentSignal.aborted) return
-    const reservation = await this.bridge.acquire(this.workspaceKey)
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- The signal can abort while acquire is pending.
+    const automationLease = this.options.automationLease
+    let reservation: DesktopBrowserReservation
+    if (automationLease === undefined) {
+      this.workspaceKey ??= await this.workspace(attachmentSignal)
+      if (attachmentSignal.aborted) return
+      reservation = await this.bridge.acquire(this.workspaceKey)
+    } else {
+      if (this.bridge.automationVersion !== 1 || this.bridge.claim === undefined) throw new Error('Desktop model browser bridge is unavailable')
+      reservation = await this.bridge.claim(automationLease)
+    }
     if (attachmentSignal.aborted) { await this.release(reservation.lease); return }
     this.lease = reservation.lease
     this.guestLifetime = new AbortController()
     const signal = AbortSignal.any([attachmentSignal, this.guestLifetime.signal])
+    if (automationLease !== undefined) {
+      let revision = 0
+      const unsubscribeState = this.bridge.onState?.((state) => {
+        if (String(state.target) !== String(reservation.lease) || signal.aborted) return
+        revision++
+        this.store.set({ ...this.store.getSnapshot(), automation: state })
+      })
+      if (unsubscribeState !== undefined) signal.addEventListener('abort', unsubscribeState, { once: true })
+      const baselineRevision = revision
+      const state = await this.bridge.state?.(reservation.lease)
+      if (!signal.aborted && state !== undefined && revision === baselineRevision) {
+        this.store.set({ ...this.store.getSnapshot(), automation: state })
+      }
+      if (signal.aborted) return
+    }
     const element = this.presentation.createElement(reservation)
     this.element = element
     const unsubscribeOpen = this.bridge.onOpenRequested(reservation.lease, (url) => {

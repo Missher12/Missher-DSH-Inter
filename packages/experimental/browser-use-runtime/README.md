@@ -35,6 +35,10 @@ A busy attachment skips startup permanently for that live activation while its o
 
 Callers can inspect prompt assembly and scoped tool definitions after awaited Agent creation or resume completes.
 
+When the trusted `browserInteraction` consumer is mounted, each MCP activation registers its own controls and read-only state. Stop and takeover immediately reject new and queued calls, then wait for admitted calls to settle. Resume requires an explicit consumer action and a new provider-supported observation before another action. Cancellation leaves the result uncertain and stops further calls; it does not undo delivered input. The catalog stays stable while control is suspended.
+
+Providers can request a private temporary working directory, exclude exact upstream tools at MCP discovery, and validate remaining arguments before execution. Temporary files are removed only after connection teardown; durable screenshot attachments use the normal attachment store.
+
 Browser tools and resource requests targeting this server use the same queue and require the calling Session's own connection. Other MCP servers remain usable. Inherited server instructions are omitted without ownership; the shared server-name inventory keeps its normal scope behavior.
 
 -----

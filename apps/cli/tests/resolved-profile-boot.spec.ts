@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe('runProfile with an application-owned profile', () => {
   it.each(
-    ['composition', 'boot', 'watch', 'cleanup', 'tree-cleanup', 'both-cleanups'] as const,
+    ['composition', 'host-prepare', 'boot', 'watch', 'cleanup', 'tree-cleanup', 'both-cleanups'] as const,
   )('releases startup resources after a %s failure', async (stage) => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-profile-startup-failure-'))
     homes.push(home)
@@ -68,6 +68,7 @@ describe('runProfile with an application-owned profile', () => {
       const application = runProfile({
         environment: createLaunchEnvironmentSnapshot([]), profile: 'desktop', patchFiles: [], args: ['--no-open'],
         resolvedProfile: { profile, installAnchor: join(home, 'runtime/package.json') },
+        ...(stage === 'host-prepare' ? { prepareContext: () => { throw failure } } : {}),
       })
       if (stage === 'both-cleanups') {
         await expect(application).rejects.toMatchObject({ errors: [failure, { errors: [treeCleanupFailure, cleanupFailure] }] })
@@ -110,8 +111,15 @@ describe('runProfile with an application-owned profile', () => {
     const dispose = vi.spyOn(ctx.fiber, 'dispose')
     const disposeProxy = vi.fn().mockResolvedValue(undefined)
     vi.mocked(installProxyFromEnvironment).mockResolvedValue(disposeProxy)
+    let hostAdaptersReady = false
+    const prepareContext = async (host: Context): Promise<void> => {
+      expect(host.profileContext.name).toBe('desktop')
+      await Promise.resolve()
+      hostAdaptersReady = true
+    }
     vi.mocked(boot).mockImplementation(async (_name, _root, _patches, setup) => {
       await setup?.(ctx)
+      expect(hostAdaptersReady).toBe(true)
       return ctx
     })
     const homePatch = join(home, 'cordis.patch.yml')
@@ -138,6 +146,7 @@ describe('runProfile with an application-owned profile', () => {
       const { shutdown } = await runProfile({
         environment, profile: 'desktop', resolvedProfile: runtime,
         patchFiles: [overlay], args: ['--port', '0', '--no-open'],
+        prepareContext,
       })
       expect(installProxyFromEnvironment).toHaveBeenCalledWith(environment, expect.any(Function))
       const resolution = vi.mocked(createRuntimeResolution).mock.settledResults

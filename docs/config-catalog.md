@@ -963,6 +963,27 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-computer-use-cua-driver-mcp -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-computer-use-cua-driver-native -->
+<a id="deepseek-aidsh-experimental-computer-use-cua-driver-native"></a>
+
+## `@deepseek-ai/dsh-experimental-computer-use-cua-driver-native`
+
+- `inject`: `computerUse` · `tools` · `systemPrompt` · `agents`
+- `source`: [`packages/experimental/computer-use-cua-driver-native/src/index.ts:28`](../packages/experimental/computer-use-cua-driver-native/src/index.ts)
+
+```ts config-catalog
+/** Native browser exposure and upper bounds for activation-owned grants. */
+export interface Config {
+  /** Expose native SDK browser tools when no Browser Use provider owns browser access. */
+  browserTools: boolean
+  /** Maximum lifetime in seconds of one native work segment and its resource grants. */
+  sessionTtlSeconds: number
+  /** Maximum idle lifetime in seconds, bounded by the total work-segment lifetime. */
+  idleTtlSeconds: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-experimental-computer-use-cua-driver-native -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-experimental-inspector -->
 <a id="deepseek-aidsh-experimental-inspector"></a>
 
@@ -2035,7 +2056,7 @@ export interface LspLocalServerConfig {
 ## `@deepseek-ai/dsh-mcp-client`
 
 - `inject`: `tools`
-- `source`: [`packages/mcp/mcp-client/src/index.ts:104`](../packages/mcp/mcp-client/src/index.ts)
+- `source`: [`packages/mcp/mcp-client/src/index.ts:108`](../packages/mcp/mcp-client/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -2067,6 +2088,8 @@ export interface StdioConfig {
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
+  /** Exact upstream tool names excluded from discovery and every later catalog refresh. */
+  excludedTools?: string[]
 }
 
 /** Config for connecting to an MCP server over Streamable HTTP (SSE). */
@@ -2091,6 +2114,8 @@ export interface StreamableHttpConfig {
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
+  /** Exact upstream tool names excluded from discovery and every later catalog refresh. */
+  excludedTools?: string[]
 }
 
 /** Automatic reconnect policy for one MCP server connection. */
@@ -4416,9 +4441,9 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 | `@deepseek-ai/dsh-cordis-client-runner` | — | [`packages/extensions/cordis-client-runner/src/index.ts`](../packages/extensions/cordis-client-runner/src/index.ts) |
 | `@deepseek-ai/dsh-deepseek-llm-api-extensions` | — | [`packages/llm/deepseek-llm-api-extensions/src/index.ts`](../packages/llm/deepseek-llm-api-extensions/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-auto-review` | `approval` · `llm` · `permissionPresets` · `sessions` · `tools` | [`packages/experimental/auto-review/src/index.ts`](../packages/experimental/auto-review/src/index.ts) |
+| `@deepseek-ai/dsh-experimental-browser-use-electron` | `browserUse` · `tools` · `agents` · `systemPrompt` | [`packages/experimental/browser-use-electron/src/index.ts`](../packages/experimental/browser-use-electron/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-client-ui-agent-team` | — | [`packages/experimental/client-ui-agent-team/src/index.ts`](../packages/experimental/client-ui-agent-team/src/index.ts) |
 | `@deepseek-ai/dsh-experimental-client-ui-voice-input` | — | [`packages/experimental/client-ui-voice-input/src/index.ts`](../packages/experimental/client-ui-voice-input/src/index.ts) |
-| `@deepseek-ai/dsh-experimental-computer-use-cua-driver-native` | `computerUse` · `tools` · `systemPrompt` | [`packages/experimental/computer-use-cua-driver-native/src/index.ts`](../packages/experimental/computer-use-cua-driver-native/src/index.ts) |
 | `@deepseek-ai/dsh-fs-observation-policy` | — | [`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts) |
 | `@deepseek-ai/dsh-fs-ssh` | `ssh` · `sandboxPolicy` | [`packages/ssh/fs-ssh/src/index.ts`](../packages/ssh/fs-ssh/src/index.ts) |
 | `@deepseek-ai/dsh-goal-round-driver` | `agents` · `goals` · `sessions` | [`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts) |

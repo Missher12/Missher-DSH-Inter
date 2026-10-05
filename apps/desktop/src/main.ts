@@ -2,6 +2,7 @@ import type { ProductEventMap, ProductEvent } from '@deepseek-ai/dsh-client-prod
 import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
 /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
 
+import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -54,6 +55,10 @@ import { DesktopMandatoryUpdateWindow } from './mandatory-update-window.ts'
 import { DesktopPolicyTestAuth } from './policy-test-auth.ts'
 import { DesktopUpdateDialog, type UpdateDialogOptions } from './update-dialog.ts'
 import { readDesktopRuntime } from './runtime-tree.ts'
+import { DesktopBrowserAutomation } from './browser-automation.ts'
+import { DesktopBrowserFiles } from './browser-files.ts'
+import { DesktopComputerAuthorization } from './computer-authorization.ts'
+import { parseBrowserRequest } from './browser-request.ts'
 import { DesktopBrowserGuests } from './browser-guests.ts'
 import { installDesktopShortcuts } from './keyboard.ts'
 import { DesktopUpdateOverlays } from './update-overlay.ts'
@@ -400,7 +405,46 @@ async function main(): Promise<void> {
   const applicationUrl = `${SCHEME}://app/`
   let hostUrl: string | undefined
   let hostCookie: string | undefined
-  const browserGuests = new DesktopBrowserGuests(() => hostUrl)
+  let browserFiles = new DesktopBrowserFiles(() => mainWindow)
+  const browserGuests: DesktopBrowserGuests = new DesktopBrowserGuests(() => hostUrl,
+    (event, item, guest) => { browserFiles.download(event, item, guest) },
+    (lease, url) => browserAutomation.openPopup(lease, url))
+  const browserPreferencesPath = join(app.getPath('userData'), 'browser-login-preferences.json')
+  const persistentBrowsers = new Set<string>()
+  try {
+    const saved: unknown = JSON.parse(await readFile(browserPreferencesPath, 'utf8'))
+    if (Array.isArray(saved) && saved.length <= 10000 && saved.every(value => typeof value === 'string' && value.length <= 256)) {
+      for (const value of saved) persistentBrowsers.add(value as string)
+    }
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) console.error('Browser login preferences could not be read', error)
+  }
+  const interactionStates = new Map<string, { sessionId: string; provider: string; status: string }>()
+  const createBrowserAutomation = (): DesktopBrowserAutomation => new DesktopBrowserAutomation({
+    reserve: (owner) => {
+      if (mainWindow === undefined || mainWindow.isDestroyed()) throw new Error('Open the Desktop window first')
+      return browserGuests.acquire(mainWindow.webContents, `model:${owner.sessionId}`, persistentBrowsers.has(owner.sessionId))
+    },
+    present: (owner, reservation, url) => {
+      mainWindow?.webContents.send(DESKTOP_IPC.browserModelOpen, { sessionId: owner.sessionId, lease: reservation.lease, url })
+    },
+    release: async (lease) => { if (mainWindow !== undefined) await browserGuests.release(mainWindow.webContents, lease) },
+    publish: (state) => { if (mainWindow?.isDestroyed() === false) mainWindow.webContents.send(DESKTOP_IPC.browserState, state) },
+    allowed: value => browserGuests.allowedNavigation(value),
+    selectUpload: guest => browserFiles.selectUpload(guest),
+  })
+  let browserAutomation = createBrowserAutomation()
+  const computerAuthorization = new DesktopComputerAuthorization(async (request, signal) => {
+    if (mainWindow === undefined || mainWindow.isDestroyed()) return false
+    const zh = locale.id === 'zh-CN'
+    const answer = await updateDialog.show(mainWindow, {
+      title: zh ? '接入浏览器登录环境' : 'Connect browser profile',
+      message: zh ? '允许此任务接入下面的浏览器环境？' : 'Allow this task to connect to the browser profile below?',
+      detail: `${request.summary}\n\n${zh ? '会话' : 'Session'}: ${request.sessionId}\n${zh ? '仅限本次请求；停止或退出后撤销。网页或模型不能批准此请求。' : 'This request only; stopping or exiting revokes access. Pages and models cannot approve this request.'}`,
+      buttons: zh ? ['允许本次', '拒绝'] : ['Allow once', 'Deny'], cancelId: 1, defaultId: 1, signal,
+    })
+    return answer.response === 0 && !signal.aborted
+  })
   let injections: readonly unknown[] = []
   let welcomeBackend: DesktopWelcomeBackend | undefined
   let reportedLaunch = false
@@ -441,12 +485,33 @@ async function main(): Promise<void> {
   const platformView = new DesktopPlatformView(join(app.getAppPath(), 'lib', 'preload-platform-account.cjs'),
     () => locale.id === 'zh-CN' ? 'zh_CN' : 'en_US', process.platform === 'win32' ? 'win32' : 'darwin')
   const backend = new DesktopBackendController((onFailure) => {
+    browserFiles = new DesktopBrowserFiles(() => mainWindow)
+    browserAutomation = createBrowserAutomation()
     const hostInspectPort = developmentHostInspectPort(development)
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
-      hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
+      hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, (error) => {
+        computerAuthorization.dispose(); void browserAutomation.dispose(); void browserFiles.dispose()
+        interactionStates.clear(); onFailure(error)
+      },
       primaryRuntime,
-      resources, (next) => { platformView.setSession(next) })
+      resources, (next) => { platformView.setSession(next) },
+      async (kind, value, signal) => {
+        if (kind === 'browser') return browserAutomation.request(parseBrowserRequest(value), signal)
+        if (kind === 'authorization') return computerAuthorization.request(value, signal)
+        if (kind === 'authorization-revoke' && typeof value === 'object' && value !== null && 'activationId' in value && typeof value.activationId === 'string') {
+          computerAuthorization.revoke(value.activationId); return null
+        }
+        throw new Error('Unsupported Desktop interaction')
+      },
+      (value) => {
+        if (typeof value !== 'object' || value === null || !('key' in value) || typeof value.key !== 'string' || !('state' in value)) return
+        if (value.state === null) { interactionStates.delete(value.key); return }
+        if (!('sessionId' in value) || typeof value.sessionId !== 'string' || typeof value.state !== 'object') return
+        const state = value.state as Record<string, unknown>
+        if (typeof state.provider === 'string' && typeof state.status === 'string') interactionStates.set(value.key, { sessionId: value.sessionId, provider: state.provider, status: state.status })
+      })
     return {
+      interactionControl: (key: string, action: 'resume' | 'stopped' | 'taken-over') => { host.interactionControl(key, action) },
       start: async () => {
         const ready = await host.start()
         hostCookie = await authenticateWebHost(ready.url)
@@ -496,6 +561,10 @@ async function main(): Promise<void> {
         }, (enabled) => { analyticsEnabled = enabled })
       },
       stop: async () => {
+        computerAuthorization.dispose()
+        await browserAutomation.dispose()
+        await browserFiles.dispose()
+        interactionStates.clear()
         analyticsEnabled = false
         stopAccount?.()
         try { await host.stop(requireCleanStop) }
@@ -699,6 +768,37 @@ async function main(): Promise<void> {
     reportFatal(new Error(message), 'web-boot')
   })
 
+  ipcMain.handle(DESKTOP_IPC.browserClaim, (event, lease: unknown) => {
+    assertProductSender(event)
+    return browserGuests.claim(event.sender, lease)
+  })
+  ipcMain.handle(DESKTOP_IPC.browserState, (event, lease: unknown) => {
+    assertProductSender(event)
+    browserGuests.guest(event.sender, lease)
+    return typeof lease === 'string' ? browserAutomation.state(lease) : undefined
+  })
+  ipcMain.handle(DESKTOP_IPC.browserControl, async (event, lease: unknown, action: unknown) => {
+    assertProductSender(event)
+    const guest = browserGuests.guest(event.sender, lease)
+    if (typeof lease !== 'string') throw new Error('Invalid browser target')
+    if (action === 'allow-download') { browserFiles.allowDownload(guest); return }
+    if (action === 'persistent') {
+      const state = browserAutomation.state(lease)
+      if (state === undefined || mainWindow === undefined) return
+      const zh = locale.id === 'zh-CN'
+      const choice = await updateDialog.show(mainWindow, { title: zh ? '保留浏览器登录' : 'Keep browser login',
+        message: zh ? '为此会话以后新建的浏览器标签保留登录状态？' : 'Keep login state for new browser tabs in this session?',
+        detail: zh ? '已有标签不变。登录数据只属于此会话，保存在本应用数据目录；卸载插件不会删除。不会读取外部浏览器账号。' : 'Existing tabs stay unchanged. Data belongs to this session in application storage and survives plugin removal. External browser profiles are not imported.',
+        buttons: zh ? ['保留登录', '取消'] : ['Keep login', 'Cancel'], cancelId: 1, defaultId: 1 })
+      if (choice.response === 0) {
+        persistentBrowsers.add(state.sessionId)
+        await writeFileAtomic(browserPreferencesPath, JSON.stringify([...persistentBrowsers]), { mode: 0o600 })
+      }
+      return
+    }
+    if (action !== 'stop' && action !== 'takeover' && action !== 'resume') throw new Error('Invalid browser control')
+    await browserAutomation.control(lease, action)
+  })
   ipcMain.handle(DESKTOP_IPC.browserAcquire, (event, workspace: unknown) => {
     assertProductSender(event)
     return browserGuests.acquire(event.sender, workspace)
@@ -968,6 +1068,24 @@ async function main(): Promise<void> {
         click: () => { void showAbout().catch((error: unknown) => { console.error(error) }) } }
       : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
     { type: 'separator' },
+    { label: currentDesktopLocale().messages.interactionMenu, click: () => { void (async () => {
+      if (mainWindow === undefined) return
+      const entries = [...interactionStates]
+      const messages = currentDesktopLocale().messages
+      if (entries.length === 0) {
+        await updateDialog.show(mainWindow, { title: messages.interactionMenu, message: messages.interactionEmpty,
+          buttons: [messages.updateAcknowledge] })
+        return
+      }
+      const picked = await updateDialog.show(mainWindow, { title: messages.interactionMenu, message: messages.interactionChoose,
+        buttons: [...entries.map(([, v]) => `${v.sessionId.slice(-8)} · ${v.provider} · ${v.status}`), messages.later], cancelId: entries.length })
+      const selected = entries[picked.response]
+      if (selected === undefined) return
+      const choice = await updateDialog.show(mainWindow, { title: messages.interactionMenu, message: messages.interactionAction,
+        buttons: [messages.interactionStop, messages.interactionTakeover, messages.interactionResume, messages.later], cancelId: 3 })
+      const action = (['stopped', 'taken-over', 'resume'] as const)[choice.response]
+      if (action !== undefined) backend.host?.interactionControl(selected[0], action)
+    })().catch((error: unknown) => { console.error('Interaction control failed', error) }) } },
     { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
     ...process.platform === 'darwin' || process.platform === 'win32'
       ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
@@ -1081,7 +1199,8 @@ async function main(): Promise<void> {
   const createMainWindow = (): BrowserWindow => {
     const window = createWindow(appPreload, false, true)
     mainWindow = window
-    browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
+    browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name),
+      (lease, guest) => { browserAutomation.attached(lease, guest) })
     shortcuts.attach(window)
     window.on('focus', automaticCheck)
     // Closing hides: the page and the Host keep running, and the next show resumes the same document.

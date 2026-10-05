@@ -74,6 +74,8 @@ export interface StdioConfig {
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
+  /** Exact upstream tool names excluded from discovery and every later catalog refresh. */
+  excludedTools?: string[]
 }
 
 /** Config for connecting to an MCP server over Streamable HTTP (SSE). */
@@ -98,6 +100,8 @@ export interface StreamableHttpConfig {
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
   reconnect?: ReconnectConfig
+  /** Exact upstream tool names excluded from discovery and every later catalog refresh. */
+  excludedTools?: string[]
 }
 
 /** Configuration for one stdio or Streamable HTTP MCP server. */
@@ -128,6 +132,7 @@ export const Config = z.union([
     failOnStartupError: z.boolean().default(false),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
+    excludedTools: z.array(String),
   }),
   z.object({
     transport: z.const('streamable-http'),
@@ -138,6 +143,7 @@ export const Config = z.union([
     failOnStartupError: z.boolean().default(false),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
+    excludedTools: z.array(String),
   }),
 ]) as z<ConfigInput, Config>
 

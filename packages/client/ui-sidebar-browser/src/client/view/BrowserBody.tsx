@@ -16,9 +16,15 @@ import type { BrowserInjected } from '../browser/BrowserController.ts'
 import { emptyBrowserFrame } from '../browser/BrowserFrame.ts'
 import { currentBrowserTarget } from '../browser/BrowserPersistence.ts'
 import type { BrowserStore } from '../browser/store.ts'
+import type { SidebarBrowserKey } from '../locales.ts'
 import css from './Browser.module.css'
 
 const EMPTY_FRAME = emptyBrowserFrame()
+const OPERATION_LABELS: Readonly<Record<string, SidebarBrowserKey>> = {
+  open: 'automation.action.open', navigate: 'automation.action.open', observe: 'automation.action.observe',
+  screenshot: 'automation.action.screenshot', click: 'automation.action.click', fill: 'automation.action.fill',
+  press: 'automation.action.press', scroll: 'automation.action.scroll', wait: 'automation.action.wait', upload: 'automation.action.upload',
+}
 
 function SandboxPolicyIcon({ sandboxed }: { readonly sandboxed: boolean }): ReactNode {
   return (
@@ -45,12 +51,13 @@ function useBrowserDraft(url: string | undefined, revision: number): readonly [s
 
 /** Render provider-neutral navigation state and optional controls. */
 export function BrowserBody(props: BrowserBodyProps): ReactNode {
-  const { mount, loadUrl, restore, goBack, goForward, reload, setSandbox, useBrowserState, useStore, useTabInfo, t } = props
+  const { mount, loadUrl, restore, goBack, goForward, reload, setSandbox, control, useBrowserState, useStore, useTabInfo, t } = props
   const { tab } = useTabInfo()
   useEffect(() => tab.actions.bindCommands({ refresh: () => { reload(tab.id) } }), [tab.actions, tab.id, reload])
   const saved = useStore(state => state.byTab[tab.id])
   const initial = useRef(saved)
   const initialUrl = useRef(tab.navigation.params?.url)
+  const automationLease = useRef(tab.navigation.params?.automationLease)
   const viewportId = useId()
   const [mountEpoch, setMountEpoch] = useState(0)
   const state = useBrowserState(tab.id)
@@ -63,6 +70,7 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
     const hide = mount({
       tabId: tab.id, signal: tab.signal, viewportId, applicationOrigin: window.location.origin,
       initial: initial.current, initialUrl: initialUrl.current,
+      ...automationLease.current === undefined ? {} : { automationLease: automationLease.current },
       openTab: (url) => { tab.actions.openTab('browser', { params: { url }, revealIfOpened: false }) },
     })
     setMountEpoch(value => value + 1)
@@ -74,6 +82,7 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
   const sandboxed = frame.sandboxEnabled
   const failure = state?.addressFailure
   const error = frame.error
+  const automation = frame.automation
   const submit = (event: FormEvent): void => { event.preventDefault(); loadUrl(tab.id, draft) }
 
   return (
@@ -108,6 +117,27 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
           onClick={() => { setSandbox(tab.id, !sandboxed) }}
         ><SandboxPolicyIcon sandboxed={sandboxed} /></button>}
       </form>
+      {automation !== undefined && <section className={css.automation} aria-label={t('automation.label')}>
+        <div className={css.automationStatus} role="status">
+          <span>{t('automation.owner', { session: automation.sessionId.slice(0, 8) })}</span>
+          <span>{t(`automation.storage.${automation.storage}`)}</span>
+          <strong>{t(`automation.status.${automation.status}`)}</strong>
+          {automation.operation !== undefined && <span>{t(OPERATION_LABELS[automation.operation] ?? 'automation.action.other')}</span>}
+        </div>
+        <div className={css.automationActions}>
+          <Button size="sm" variant="outline" disabled={automation.status === 'stopped' || automation.status === 'disconnected'}
+            onClick={() => { void control(tab.id, 'stop') }}>{t('automation.stop')}</Button>
+          <Button size="sm" variant="outline" disabled={automation.status === 'taken-over' || automation.status === 'disconnected'}
+            onClick={() => { void control(tab.id, 'takeover') }}>{t('automation.takeover')}</Button>
+          <Button size="sm" variant="outline" disabled={automation.status !== 'stopped' && automation.status !== 'taken-over'}
+            onClick={() => { void control(tab.id, 'resume') }}>{t('automation.resume')}</Button>
+          <Button size="sm" variant="outline" disabled={automation.status === 'disconnected'}
+            onClick={() => { void control(tab.id, 'allow-download') }}>{t('automation.download')}</Button>
+          {automation.storage === 'temporary' && <Button size="sm" variant="outline"
+            onClick={() => { void control(tab.id, 'persistent') }}>{t('automation.persistent')}</Button>}
+        </div>
+        {frame.automationError === true && <p role="alert">{t('automation.failed')}</p>}
+      </section>}
       {sandboxed === false && <div className={css.sandboxWarning} role="status">{t('sandbox.warning')}</div>}
       {error !== undefined && <div className={css.failure} role="status">{error.code !== undefined && error.description !== undefined
         ? t('load.failed.detail', { code: String(error.code), description: error.description })

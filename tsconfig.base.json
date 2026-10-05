@@ -55,6 +55,10 @@
 
       "@deepseek-ai/dsh/profile-boot": ["./apps/cli/src/profile-boot.ts"],
       "@deepseek-ai/dsh/lib/bin.js": ["./apps/cli/src/bin.ts"],
+      "@deepseek-ai/dsh-computer-use/authorization": ["./packages/computer-use/computer-use/src/authorization.ts"],
+      "@deepseek-ai/dsh-experimental-browser-use-runtime/control": ["./packages/experimental/browser-use-runtime/src/control.ts"],
+      "@deepseek-ai/dsh-experimental-browser-use-electron": ["./packages/experimental/browser-use-electron/src"],
+      "@deepseek-ai/dsh-browser-use/desktop": ["./packages/browser-use/browser-use/src/desktop.ts"],
       "@deepseek-ai/dsh-browser-use": ["./packages/browser-use/browser-use/src/index.ts"],
       "@deepseek-ai/dsh-browser-use/brand": ["./packages/browser-use/browser-use/src/brand.ts"],
       "@deepseek-ai/dsh-experimental-browser-use-runtime": ["./packages/experimental/browser-use-runtime/src/index.ts"],

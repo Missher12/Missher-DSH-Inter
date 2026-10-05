@@ -2,7 +2,8 @@
 import { createSnapshotStore, type BoundActions, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import type { BrowserFrameState } from './BrowserFrame.ts'
+import type { BrowserControlAction, BrowserFrameState } from './BrowserFrame.ts'
+import type { DesktopBrowserLeaseId } from '../../types.ts'
 import type { BrowserPage, BrowserPageFactory } from './BrowserPage.ts'
 import { currentBrowserTarget, type BrowserTabState } from './BrowserPersistence.ts'
 import type { BrowserStore } from './store.ts'
@@ -26,6 +27,7 @@ export interface BrowserControllerOptions {
   readonly actions: BoundActions<BrowserStore>
   readonly createPage: BrowserPageFactory
   readonly openTab: (url: string) => void
+  readonly automationLease?: DesktopBrowserLeaseId
 }
 
 /** Owns input validation and page lifetime without inspecting the carrier type. */
@@ -45,6 +47,7 @@ export class BrowserController implements HostObservable<BrowserControllerState>
     this.actions = options.actions
     this.checkpoint = options.initial
     this.page = options.createPage({
+      ...options.automationLease === undefined ? {} : { automationLease: options.automationLease },
       initial: options.initial,
       persist: (state) => {
         if (this.disposed) return
@@ -133,6 +136,12 @@ export class BrowserController implements HostObservable<BrowserControllerState>
     if (sandbox !== undefined) this.command(() => { sandbox.setEnabled(enabled) })
   }
 
+  /** Forward a user's browser control gesture to this exact live frame.
+   * @param action - explicit browser control gesture. @returns after the provider settles it. */
+  control(action: BrowserControlAction): Promise<void> {
+    return this.disposed ? Promise.resolve() : this.page.frame.control?.(action) ?? Promise.resolve()
+  }
+
   /**
    * Redirect future checkpoint writes to a replacement Session binding.
    * @param actions - replacement persistence writer.
@@ -177,6 +186,7 @@ export interface BrowserMountRequest {
   readonly initial: BrowserTabState | undefined
   readonly initialUrl: string | undefined
   readonly openTab: (url: string) => void
+  readonly automationLease?: DesktopBrowserLeaseId
 }
 
 /** Plain Slot callbacks and a framework-bound state source, not a desktop protocol. */
@@ -202,6 +212,9 @@ export interface BrowserInjected {
   reload(tabId: TabId): void
   /** @param tabId - owning tab. @param enabled - provider's optional sandbox control. */
   setSandbox(tabId: TabId, enabled: boolean): void
+  /** Route a user control gesture to its owning tab occurrence.
+   * @param tabId - owning tab. @param action - explicit user gesture. @returns after the carrier settles the request. */
+  control(tabId: TabId, action: BrowserControlAction): Promise<void>
 }
 
 /**
@@ -263,5 +276,6 @@ export function createBrowserControllers(actions: BoundActions<BrowserStore>, cr
     goForward: (id) => { controller(id)?.goForward() },
     reload: (id) => { controller(id)?.reload() },
     setSandbox: (id, enabled) => { controller(id)?.setSandbox(enabled) },
+    control: (id, action) => controller(id)?.control(action) ?? Promise.resolve(),
   }
 }

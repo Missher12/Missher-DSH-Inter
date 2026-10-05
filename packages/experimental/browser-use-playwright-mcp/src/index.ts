@@ -45,6 +45,16 @@ export function apply(ctx: Context, config: Config): void {
     command: process.execPath,
     args,
     env,
+    privateWorkspace: true,
+    deniedTools: ['browser_run_code_unsafe', 'browser_file_upload', 'browser_drop'],
+    observationTools: ['browser_snapshot'],
+    validateToolArguments(_name, args) {
+      // The pinned server's file-root check is not a security boundary.
+      // Model-selected paths stay disabled until a trusted file workflow owns them.
+      if (typeof args === 'object' && args !== null && 'filename' in args) {
+        throw new Error('Browser output uses managed temporary files. Custom file paths require an authorized file workflow.')
+      }
+    },
     ...config.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: config.toolCallTimeoutMs },
   })
 }
