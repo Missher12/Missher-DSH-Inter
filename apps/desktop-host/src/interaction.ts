@@ -1,8 +1,8 @@
 /** Child-process transport for trusted Desktop browser operations and native authorization. */
 import { FiberState, type Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-browser-use/desktop'
+import type {} from '@deepseek-ai/dsh-browser-use'
 import type { DesktopBrowserResult } from '@deepseek-ai/dsh-browser-use/desktop'
-import type {} from '@deepseek-ai/dsh-computer-use/authorization'
+import type {} from '@deepseek-ai/dsh-computer-use'
 import type { BrowserInteractionController } from '@deepseek-ai/dsh-experimental-browser-use-runtime/control'
 import type {} from '@deepseek-ai/dsh-experimental-browser-use-runtime/control'
 

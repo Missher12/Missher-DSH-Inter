@@ -1,5 +1,4 @@
 /** Type-only, guest-scoped Desktop browser service. No global debugging endpoint is exposed. */
-import type {} from '@deepseek-ai/cordis'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 
 /** Host-issued identity of an exact live Agent activation. */
@@ -53,8 +52,4 @@ export interface DesktopBrowserService {
    * @returns observed result; dispatched input is never rolled back.
    */
   request(request: DesktopBrowserRequest, signal: AbortSignal): Promise<DesktopBrowserResult>
-}
-
-declare module '@deepseek-ai/cordis' {
-  interface Context { desktopBrowser: DesktopBrowserService }
 }

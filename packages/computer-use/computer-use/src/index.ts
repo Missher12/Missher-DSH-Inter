@@ -5,10 +5,12 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ComputerUseProviderName } from './brand.ts'
+import type { ComputerAuthorization } from './authorization.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     computerUse: ComputerUseRegistry
+    computerAuthorization: ComputerAuthorization
   }
 }
 

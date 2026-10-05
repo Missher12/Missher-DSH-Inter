@@ -1,6 +1,5 @@
 /** Trusted desktop authorization for one native browser attachment request. @module */
 
-import type {} from '@deepseek-ai/cordis'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 
 /** Random native authority identity bound to one exact live Agent activation. */
@@ -38,10 +37,4 @@ export interface ComputerAuthorization {
    * @returns after the adapter can no longer approve its pending requests.
    */
   revoke(activationId: ComputerActivationId): Promise<void>
-}
-
-declare module '@deepseek-ai/cordis' {
-  interface Context {
-    computerAuthorization: ComputerAuthorization
-  }
 }

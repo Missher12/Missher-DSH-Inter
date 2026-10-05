@@ -5,10 +5,12 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { BrowserUseProviderName } from './brand.ts'
+import type { DesktopBrowserService } from './desktop.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     browserUse: BrowserUseRegistry
+    desktopBrowser: DesktopBrowserService
   }
 }
 
