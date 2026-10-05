@@ -50,6 +50,28 @@ export const QUIT_INSPECTION_DEADLINE_MS = 2_000
 
 const MAX_HOST_DIAGNOSTIC_CHARS = 64 * 1024
 
+/** Only these bounded fields cross the interaction error channel; never inspect an exception. */
+function interactionFailure(error: unknown): { code: string; message: string } {
+  let code = 'DESKTOP_INTERACTION_FAILED'
+  let message = 'Desktop interaction failed'
+  if (error instanceof Error) {
+    const suppliedCode: unknown = Object.getOwnPropertyDescriptor(error, 'code')?.value
+    if (typeof suppliedCode === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(suppliedCode)) code = suppliedCode
+    const suppliedMessage: unknown = Object.getOwnPropertyDescriptor(error, 'message')?.value
+    if (typeof suppliedMessage === 'string') {
+      message = suppliedMessage.slice(0, 4096).split(/[\r\n]/u, 1).join('')
+        .replace(/\b(?:https?|file):\/\/\S+/giu, '[URL]')
+        .replace(/\b(?:Bearer|Basic)\s+[a-z0-9+/=_-]+/giu, '[credential redacted]')
+        .replace(/\b(?:authorization|cookie|set-cookie)\s*[:=]\s*.+/giu, '[credential redacted]')
+        .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret)\s*["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, '[credential redacted]')
+        .replace(/(?:[A-Za-z]:\\|\/)[^\s"'<>]+/gu, '[path]')
+        .replace(/[\u0000-\u001f\u007f]/gu, ' ').trim().slice(0, 1024)
+      if (message === '') message = 'Desktop interaction failed'
+    }
+  }
+  return { code, message }
+}
+
 function isDesktopHostEvent(message: unknown): message is DesktopHostEvent {
   if (typeof message !== 'object' || message === null || !('type' in message)) return false
   const candidate = message as Record<string, unknown>
@@ -228,8 +250,10 @@ export class DesktopHostProcess {
           })
           void answer.then((value) => {
             if (child.connected && !controller.signal.aborted) child.send({ type: 'desktop-interaction-result', requestId, value }, () => {})
-          }, () => {
-            if (child.connected) child.send({ type: 'desktop-interaction-result', requestId, error: 'unavailable' }, () => {})
+          }, (error: unknown) => {
+            const failure = interactionFailure(error)
+            console.warn(`Desktop interaction ${requestId} rejected [${failure.code}]: ${failure.message}`)
+            if (child.connected) child.send({ type: 'desktop-interaction-result', requestId, error: failure }, () => {})
           }).catch((error: unknown) => { console.error('Desktop interaction reply failed', error) }).finally(() => { this.interactions.delete(requestId) })
           return
         }

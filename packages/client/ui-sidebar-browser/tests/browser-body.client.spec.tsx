@@ -118,6 +118,8 @@ describe('BrowserBody', () => {
     } })
     expect(mounted.view.getByRole('status').textContent).toContain('DNS failure')
     expect(mounted.view.getByRole('status').textContent).toContain('-105')
+    act(() => { state.set({ ...state.getSnapshot(), error: { code: undefined, description: 'Browser reservation unavailable' } }) })
+    expect(mounted.view.getByRole('status').textContent).toBe('页面加载失败：Browser reservation unavailable')
     act(() => { state.set({ ...state.getSnapshot(), error: { code: -105, description: undefined } }) })
     expect(mounted.view.getByRole('status').textContent).toBe(zh['load.failed'])
     act(() => { providers[0]!.openRequested('https://new.example/') })

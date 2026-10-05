@@ -60,6 +60,7 @@ import { DesktopBrowserFiles } from './browser-files.ts'
 import { DesktopComputerAuthorization } from './computer-authorization.ts'
 import { parseBrowserRequest } from './browser-request.ts'
 import { DesktopBrowserGuests } from './browser-guests.ts'
+import { installBrowserReservationIpc } from './browser-reservation-ipc.ts'
 import { installDesktopShortcuts } from './keyboard.ts'
 import { DesktopUpdateOverlays } from './update-overlay.ts'
 import { DesktopQuitConfirmation } from './quit-confirmation.ts'
@@ -768,20 +769,12 @@ async function main(): Promise<void> {
     reportFatal(new Error(message), 'web-boot')
   })
 
-  ipcMain.handle(DESKTOP_IPC.browserClaim, (event, lease: unknown) => {
-    assertProductSender(event)
-    return browserGuests.claim(event.sender, lease)
-  })
-  ipcMain.handle(DESKTOP_IPC.browserState, (event, lease: unknown) => {
-    assertProductSender(event)
-    browserGuests.guest(event.sender, lease)
-    return typeof lease === 'string' ? browserAutomation.state(lease) : undefined
-  })
+  installBrowserReservationIpc(ipcMain, assertProductSender, browserGuests, () => browserAutomation)
   ipcMain.handle(DESKTOP_IPC.browserControl, async (event, lease: unknown, action: unknown) => {
     assertProductSender(event)
-    const guest = browserGuests.guest(event.sender, lease)
+    browserGuests.assertOwned(event.sender, lease)
     if (typeof lease !== 'string') throw new Error('Invalid browser target')
-    if (action === 'allow-download') { browserFiles.allowDownload(guest); return }
+    if (action === 'allow-download') { browserFiles.allowDownload(browserGuests.guest(event.sender, lease)); return }
     if (action === 'persistent') {
       const state = browserAutomation.state(lease)
       if (state === undefined || mainWindow === undefined) return
@@ -798,14 +791,6 @@ async function main(): Promise<void> {
     }
     if (action !== 'stop' && action !== 'takeover' && action !== 'resume') throw new Error('Invalid browser control')
     await browserAutomation.control(lease, action)
-  })
-  ipcMain.handle(DESKTOP_IPC.browserAcquire, (event, workspace: unknown) => {
-    assertProductSender(event)
-    return browserGuests.acquire(event.sender, workspace)
-  })
-  ipcMain.handle(DESKTOP_IPC.browserRelease, (event, lease: unknown) => {
-    assertProductSender(event)
-    return browserGuests.release(event.sender, lease)
   })
 
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['ws://127.0.0.1/*'] }, (details, callback) => {
@@ -1200,7 +1185,8 @@ async function main(): Promise<void> {
     const window = createWindow(appPreload, false, true)
     mainWindow = window
     browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name),
-      (lease, guest) => { browserAutomation.attached(lease, guest) })
+      (lease, guest) => { browserAutomation.attached(lease, guest) },
+      (lease, failure) => { browserAutomation.failed(lease, failure) })
     shortcuts.attach(window)
     window.on('focus', automaticCheck)
     // Closing hides: the page and the Host keep running, and the next show resumes the same document.

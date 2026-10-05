@@ -1,5 +1,5 @@
 /** Type-only Electron bridge declarations shared by the desktop shell and browser provider. */
-import type { DesktopBrowserState } from '@deepseek-ai/dsh-browser-use/desktop'
+import type { DesktopBrowserFailure, DesktopBrowserState } from '@deepseek-ai/dsh-browser-use/desktop'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 
 /** Main-issued identity of one guest reservation. */
@@ -32,8 +32,10 @@ export interface DesktopBrowserBridge {
   claim?(lease: DesktopBrowserLeaseId): Promise<DesktopBrowserReservation>
   /** @param listener - exact model tab to display. @returns unsubscribe. */
   onModelOpen?(listener: (request: DesktopBrowserModelOpen) => void): () => void
-  /** @param lease - attached tab. @returns main-owned state or absence for manual tabs. */
+  /** @param lease - owned reservation, including before attachment. @returns main-owned state or absence for manual tabs. */
   state?(lease: DesktopBrowserLeaseId): Promise<DesktopBrowserState | undefined>
+  /** @param lease - owned reservation. @param failure - bounded initialization diagnosis. @returns after main records failure. */
+  reportFailure?(lease: DesktopBrowserLeaseId, failure: DesktopBrowserFailure): Promise<void>
   /** @param listener - main-owned tab state. @returns unsubscribe. */
   onState?(listener: (state: DesktopBrowserState) => void): () => void
   /** @param lease - attached tab. @param action - explicit trusted user gesture. @returns after control settles. */

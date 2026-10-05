@@ -20,6 +20,7 @@ export const DESKTOP_IPC = {
   browserClaim: 'dsh-desktop:browser-claim',
   browserModelOpen: 'dsh-desktop:browser-model-open',
   browserState: 'dsh-desktop:browser-state',
+  browserFailure: 'dsh-desktop:browser-failure',
   browserControl: 'dsh-desktop:browser-control',
   interactionState: 'dsh-desktop:interaction-state',
   interactionControl: 'dsh-desktop:interaction-control',

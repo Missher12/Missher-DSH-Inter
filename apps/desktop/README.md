@@ -100,6 +100,8 @@ The application preload exposes boot readiness, fatal startup reporting, native 
 
 Only the main application window enables `<webview>`. Guest attachment must match a main-issued lease and partition; guests keep sandbox, context isolation and Web security without Node integration or guest preload. Browser IPC listeners are created only for the application document. [Sidebar Browser](../../packages/client/ui-sidebar-browser/README.md) describes storage grouping and guest limitations; Host authentication remains required independently of URL filtering.
 
+Reservation state reads require lease ownership and remain valid before a guest exists. Main validates the initial lease and partition, records the native guest ID during the synchronous `web-contents-created` event, and verifies that reservation again on attachment. It checks the owning window and Chromium session at both boundaries; it never derives ownership from the page URL at `dom-ready`. Pending creation expires at the next microtask, so an unrelated later guest cannot consume the reservation. Initialization rejection reasons reach the tab and tool result; Host IPC sends bounded, sanitized error codes and messages without stacks or request payloads.
+
 The `dsh-app://shell/` origin serves packaged update documents, scripts, and styles without contacting the Host. Static requests retain GET/HEAD, path-containment, and MIME handling; each update document keeps its isolated preload and owned-window IPC checks.
 
 The product UI retains Web actions, including "Open In..." through the shared authenticated HTTP routes. Desktop uses Web's automatic directory-picker selection and initializes new profiles with the shared Web template's bundles.

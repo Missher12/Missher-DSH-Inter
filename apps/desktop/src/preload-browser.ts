@@ -21,6 +21,7 @@ export function createDesktopBrowserBridge(): DesktopBrowserBridge {
     automationVersion: 1,
     claim: lease => ipcRenderer.invoke(DESKTOP_IPC.browserClaim, lease) as Promise<import('@deepseek-ai/dsh-client-ui-sidebar-browser/types').DesktopBrowserReservation>,
     state: lease => ipcRenderer.invoke(DESKTOP_IPC.browserState, lease) as Promise<DesktopBrowserState | undefined>,
+    reportFailure: (lease, failure) => ipcRenderer.invoke(DESKTOP_IPC.browserFailure, lease, failure) as Promise<void>,
     control: (lease, action) => ipcRenderer.invoke(DESKTOP_IPC.browserControl, lease, action) as Promise<void>,
     onModelOpen(listener) {
       const receive = (_event: Electron.IpcRendererEvent, request: DesktopBrowserModelOpen): void => { listener(request) }

@@ -29,6 +29,8 @@
 
 Electron 提供方提供一个 `browser_use` 工具，并从实时 Agent 派生所有者。可选 `desktopBrowser` 适配器接收 `DesktopBrowserRequest` 并返回 `DesktopBrowserResult`；Desktop 主进程拥有不透明 guest lease、新鲜快照与有限操作。它不开放全局调试端口。`browserInteraction` 将提供方拥有的停止、接管及恢复控制投影到可信 Desktop UI，不向提供方注册表添加操作方法。
 
+`DesktopBrowserState.failure` 可携带有界的初始化错误 `code` 与 `message`。所属预约尚未挂载 guest 时也可读取状态。初始化失败或开页前已断开的请求返回 `unavailable`，在 `data.failure` 中给出诊断并释放预约，不返回可操作目标或重放输入。
+
 Computer Browser Bundle 选择的独立 Playwright 浏览器可见。侧栏提供方操作真实可见的 guest。停止与接管阻止排队动作；恢复后必须重新观察。已投递输入不能撤销或自动重试。切换提供方必须卸载原 profile 的组合并重启选定组合。
 
 侧栏登录环境默认为临时存储。用户可为当前 Session 明确选择托管持久 partition，用于随后新开的标签页。cookie 位于 Electron userData 下，与外部浏览器分离。重启只恢复明确持久化的登录数据与既有侧栏 URL 检查点；旧 Agent lease、快照和页面运行状态不会恢复。卸载保留托管登录数据。上传使用原生文件明确选择；下载需要单次许可与新保存位置，拒绝覆盖和符号链接，并清理未完成的暂存文件。

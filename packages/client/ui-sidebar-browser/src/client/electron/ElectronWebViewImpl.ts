@@ -1,6 +1,7 @@
 /** Electron navigation and guest lifetime, independent from DOM placement. */
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { DesktopBrowserBridge, DesktopBrowserLeaseId, DesktopBrowserReservation } from '../../types.ts'
+import type { DesktopBrowserState } from '@deepseek-ai/dsh-browser-use/desktop'
 import type { ElectronWebviewPresentation, WebviewElement } from './ElectronWebviewPresentation.ts'
 import { emptyBrowserFrame, type BrowserControlAction, type BrowserFrame, type BrowserFrameState, type BrowserLoadError } from '../browser/BrowserFrame.ts'
 import type { BrowserPageOptions } from '../browser/BrowserPage.ts'
@@ -11,6 +12,12 @@ interface NavigationEvent extends Event { readonly isMainFrame: boolean }
 interface LoadFailureEvent extends NavigationEvent {
   readonly errorCode: number
   readonly errorDescription: string
+}
+
+function failureMessage(error: unknown): string | undefined {
+  const message = typeof error === 'string' ? error
+    : typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string' ? error.message : undefined
+  return message?.replace(/[\u0000-\u001f\u007f]/gu, ' ').trim().slice(0, 500) || undefined
 }
 
 /** Owns native history and translates Electron observations into common frame state. */
@@ -29,6 +36,7 @@ export class ElectronWebViewImpl implements BrowserFrame {
   private checkpoint: BrowserTarget | undefined
   private disposal: Promise<void> | undefined
   private attachment: AbortController | undefined
+  private unsubscribeState: (() => void) | undefined
   private readonly releases = new Set<Promise<void>>()
 
   /**
@@ -53,6 +61,7 @@ export class ElectronWebViewImpl implements BrowserFrame {
   attach(): void {
     if (this.lifetime.signal.aborted) return
     this.attachment = new AbortController()
+    if (this.modelGuestUnavailable() || (this.options.automationLease !== undefined && this.store.getSnapshot().error !== undefined)) return
     this.pending ??= this.store.getSnapshot().target
     if (this.pending !== undefined) {
       this.store.set({ ...this.store.getSnapshot(), address: 'requested', loading: true,
@@ -146,8 +155,25 @@ export class ElectronWebViewImpl implements BrowserFrame {
   private initialize(): void {
     const attachment = this.attachment
     if (attachment === undefined || this.initializing !== undefined || this.element !== undefined || this.lifetime.signal.aborted) return
+    if (this.modelGuestUnavailable()) {
+      this.pending = undefined
+      this.store.set({ ...this.store.getSnapshot(), loading: false })
+      return
+    }
     const signal = AbortSignal.any([this.lifetime.signal, attachment.signal])
     this.initializing = this.createGuest(signal).catch(async (error: unknown) => {
+      if (!signal.aborted) {
+        this.pending = undefined
+        const lease = this.lease ?? this.options.automationLease
+        if (this.options.automationLease !== undefined && lease !== undefined) {
+          try {
+            await this.bridge.reportFailure?.(lease, {
+              code: 'browser-client-initialization-failed',
+              message: failureMessage(error) ?? 'Browser client initialization failed.',
+            })
+          } catch (reportError) { console.error('Desktop browser failure report failed', reportError) }
+        }
+      }
       await this.dropGuest()
       if (!signal.aborted) this.commandFailed(error)
     }).finally(() => {
@@ -173,16 +199,18 @@ export class ElectronWebViewImpl implements BrowserFrame {
     const signal = AbortSignal.any([attachmentSignal, this.guestLifetime.signal])
     if (automationLease !== undefined) {
       let revision = 0
+      this.unsubscribeState?.()
       const unsubscribeState = this.bridge.onState?.((state) => {
-        if (String(state.target) !== String(reservation.lease) || signal.aborted) return
+        if (String(state.target) !== String(reservation.lease) || attachmentSignal.aborted) return
         revision++
-        this.store.set({ ...this.store.getSnapshot(), automation: state })
+        this.applyAutomationState(state)
       })
-      if (unsubscribeState !== undefined) signal.addEventListener('abort', unsubscribeState, { once: true })
+      this.unsubscribeState = unsubscribeState
+      if (unsubscribeState !== undefined) attachmentSignal.addEventListener('abort', unsubscribeState, { once: true })
       const baselineRevision = revision
       const state = await this.bridge.state?.(reservation.lease)
       if (!signal.aborted && state !== undefined && revision === baselineRevision) {
-        this.store.set({ ...this.store.getSnapshot(), automation: state })
+        this.applyAutomationState(state)
       }
       if (signal.aborted) return
     }
@@ -217,8 +245,22 @@ export class ElectronWebViewImpl implements BrowserFrame {
         this.failed({ code: failure.errorCode, description: failure.errorDescription })
       }
     }, { signal })
+    let disconnected = false
     for (const name of ['render-process-gone', 'destroyed']) {
-      element.addEventListener(name, () => { void this.dropGuest(); this.failed() }, { signal })
+      element.addEventListener(name, () => {
+        if (disconnected) return
+        disconnected = true
+        const message = `Browser guest ${name} before its next observation.`
+        this.failed(this.store.getSnapshot().error ?? { code: undefined, description: message })
+        this.pending = undefined
+        if (automationLease === undefined || this.ready) { void this.dropGuest(); return }
+        const cleanup = (async () => {
+          try { await this.bridge.reportFailure?.(reservation.lease, { code: 'browser-client-initialization-failed', message }) }
+          catch (error) { console.error('Desktop browser failure report failed', error) }
+          if (this.element === element) await this.dropGuest()
+        })().finally(() => { this.releases.delete(cleanup) })
+        this.releases.add(cleanup)
+      }, { signal })
     }
     this.presentation.present(element)
   }
@@ -273,6 +315,22 @@ export class ElectronWebViewImpl implements BrowserFrame {
     this.options.persist(browserAddressCheckpoint(target, this.revision))
   }
 
+  private modelGuestUnavailable(): boolean {
+    const status = this.store.getSnapshot().automation?.status
+    return this.options.automationLease !== undefined && (status === 'disconnected' || status === 'stopped')
+  }
+
+  private applyAutomationState(state: DesktopBrowserState): void {
+    const current = this.store.getSnapshot()
+    const unavailable = state.status === 'disconnected' || state.status === 'stopped'
+    if (unavailable) this.pending = undefined
+    this.store.set({ ...current, automation: state,
+      ...(unavailable ? { loading: false } : {}),
+      ...(state.failure === undefined ? {} : { error: { code: undefined, description: failureMessage(state.failure.message) } }),
+    })
+    if (state.status === 'disconnected' || (unavailable && this.element === undefined)) void this.dropGuest()
+  }
+
   private failed(error: BrowserLoadError = { code: undefined, description: undefined }): void {
     if (this.lifetime.signal.aborted) return
     const current = this.store.getSnapshot()
@@ -282,7 +340,7 @@ export class ElectronWebViewImpl implements BrowserFrame {
 
   private commandFailed(error: unknown): void {
     console.error('Desktop browser operation failed', error)
-    this.failed()
+    this.failed({ code: undefined, description: failureMessage(error) })
   }
 
   private dropGuest(): Promise<void> {

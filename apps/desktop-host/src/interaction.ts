@@ -6,6 +6,19 @@ import type {} from '@deepseek-ai/dsh-computer-use'
 import type { BrowserInteractionController } from '@deepseek-ai/dsh-experimental-browser-use-runtime/control'
 import type {} from '@deepseek-ai/dsh-experimental-browser-use-runtime/control'
 
+/** Validate the private IPC diagnostic without serializing objects supplied by the peer. */
+function interactionError(value: unknown): Error {
+  // Older Desktop builds returned only a generic string. Preserve their privacy
+  // behavior instead of exposing arbitrary legacy exception text.
+  if (typeof value === 'string') return new Error('Desktop interaction failed; observe current state before retrying')
+  if (typeof value !== 'object' || value === null || Array.isArray(value)
+    || Object.keys(value).length !== 2 || !('code' in value) || !('message' in value)
+    || typeof value.code !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(value.code)
+    || typeof value.message !== 'string' || value.message.trim().length === 0 || value.message.length > 1024
+    || /[\u0000-\u001f\u007f]/u.test(value.message)) return new Error('Invalid Desktop interaction error response')
+  return Object.assign(new Error(`[${value.code}] ${value.message}`), { code: value.code })
+}
+
 /** Install adapters on the private Desktop Host only. @param ctx - application context. */
 export function installDesktopInteraction(ctx: Context): void {
   let nextId = 0
@@ -37,8 +50,10 @@ export function installDesktopInteraction(ctx: Context): void {
     if (typeof value !== 'object' || value === null || !('type' in value)) return
     if (value.type === 'desktop-interaction-result' && 'requestId' in value && Number.isSafeInteger(value.requestId)) {
       const owned = pending.get(Number(value.requestId))
-      if ('error' in value) owned?.reject(new Error('Desktop interaction failed; observe current state before retrying'))
-      else if ('value' in value) owned?.resolve(value.value)
+      if (owned === undefined) return
+      if ('error' in value && !('value' in value)) owned.reject(interactionError(value.error))
+      else if ('value' in value && !('error' in value)) owned.resolve(value.value)
+      else owned.reject(new Error('Invalid Desktop interaction response'))
     }
     if (value.type === 'desktop-interaction-control' && 'key' in value && typeof value.key === 'string' && 'action' in value) {
       const record = controls.get(value.key)
