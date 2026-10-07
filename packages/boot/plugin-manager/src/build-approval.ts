@@ -1,7 +1,7 @@
 /** Approve pnpm's pending dependency scripts in the current profile's workspace settings. */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isAlias, isMap, isNode, isScalar, parseDocument, visit } from 'yaml'
+import { parse, isAlias, isMap, isNode, isScalar, parseDocument, visit } from 'yaml'
 import { ManagementFailure } from './failure.ts'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 
@@ -39,12 +39,20 @@ export async function readPendingBuilds(dir: string): Promise<string[]> {
 /** Persist approval without running scripts; the caller holds the profile manifest lock.
  * @param dir Current profile directory.
  * @param names Explicit package names from the pending build list.
+ * @returns Whether pnpm has recorded builds for the approved items; its approve-builds command must execute those builds.
  * @throws If a name is no longer pending or allowBuilds contains YAML anchors or aliases; no approvals are written.
  */
-export async function approveBuilds(dir: string, names: readonly string[]): Promise<void> {
+export async function approveBuilds(dir: string, names: readonly string[]): Promise<boolean> {
   const { document, pending } = await readPolicy(dir)
   if (names.some(name => !pending.includes(name))) throw new ManagementFailure('stale-approval')
-  if (names.length === 0) return
+  if (names.length === 0) return false
   for (const name of names) document.setIn(['allowBuilds', name], true)
+  // pnpm owns version-specific dependency selectors and rebuild bookkeeping.
+  let modules: { ignoredBuilds?: unknown } = {}
+  try { modules = parse(await readFile(join(dir, 'node_modules/.modules.yaml'), 'utf8')) as typeof modules }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  const recorded = Array.isArray(modules.ignoredBuilds) && modules.ignoredBuilds.some((id: unknown) =>
+    typeof id === 'string' && names.some(name => id.startsWith(`${name}@`) || id === name))
   await writeFileAtomic(join(dir, 'pnpm-workspace.yaml'), String(document), { mode: 0o600 })
+  return recorded
 }

@@ -69,12 +69,153 @@ const READY: PluginManagerState = {
   status: 'ready',
   refreshStatus: 'idle',
   packages: [],
+  updates: {},
   busy: [],
   notice: null,
   install: IDLE_INSTALL,
   confirm: null,
   highlight: null,
 }
+
+describe('installed version update controls', () => {
+  const name = 'dsh-better-sidebar'
+  const available = { status: 'available' as const, currentVersion: '0.16.0', version: '1.0.0', spec: `${name}@1.0.0`, registry: null }
+
+  it('places an explicit check after the version on cards and on the detail page', () => {
+    const { actions, set } = renderTab({ packages: [pkg()] })
+    const card = document.querySelector('[data-plugin-package]') as HTMLElement
+    expect(within(card).getByText('v0.16.0')).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) }))
+    expect(actions.checkUpdate).toHaveBeenCalledWith(name)
+    expect(document.querySelector('[data-plugin-detail]')).toBeNull()
+    expect(actions.openUpdate).not.toHaveBeenCalled()
+    set({ updates: { [name]: available } })
+    expect(within(card).getByText(en.updateAvailable.replace('{version}', '1.0.0'))).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: en.updateLabel.replace('{name}', name) }))
+    expect(actions.openUpdate).toHaveBeenCalledWith(name)
+    fireEvent.click(within(card).getByRole('button', { name: en.openDetail.replace('{name}', name) }))
+    const detail = document.querySelector('[data-plugin-detail]') as HTMLElement
+    expect(within(detail).getByText('v0.16.0')).toBeTruthy()
+    expect(within(detail).getByRole('button', { name: en.updateLabel.replace('{name}', name) })).toBeTruthy()
+  })
+
+  it('shows checks, manual sources and errors without pretending a local package is current', () => {
+    const { set, setLanguage } = renderTab({ packages: [pkg()], updates: { [name]: { status: 'checking', currentVersion: '0.16.0' } } })
+    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', true)
+    expect(screen.getByText(en.updateChecking)).toBeTruthy()
+    set({ updates: { [name]: { status: 'manual', currentVersion: '0.16.0', source: 'path' } } })
+    expect(screen.getByText(en.updateManual)).toBeTruthy()
+    expect(screen.queryByText(en.updateCurrent)).toBeNull()
+    set({ updates: { [name]: { status: 'failed', currentVersion: '0.16.0', reason: 'offline' } } })
+    expect(screen.getByText(en.updateCheckFailed.replace('{reason}', 'offline'))).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', false)
+    setLanguage(zh)
+    expect(screen.getByRole('button', { name: zh.checkUpdateLabel.replace('{name}', name) })).toBeTruthy()
+    set({ updates: { [name]: { status: 'refused', error: { code: 'tasks-active' } } } })
+    expect(screen.getByText(zh.reasonTasksActive)).toBeTruthy()
+  })
+
+  it('does not offer updates to shipped or prepared bundles and disables protected packages', () => {
+    const { set } = renderTab({ packages: [pkg({ installed: false, optional: true })] })
+    expect(screen.queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+    set({ packages: [pkg({ readOnlyReason: 'management-required' })] })
+    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', true)
+    set({ packages: [pkg()], updates: { [name]: { status: 'restart', currentVersion: '0.16.0' } } })
+    expect(screen.getByText(en.updateRestart)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+  })
+
+  it('keeps the old version visible and the prepared version separate on cards and readable details', () => {
+    const { actions } = renderTab({ packages: [pkg({ pendingUpdate: { id: 'prepared-1', version: '1.0.0' } })] })
+    const card = document.querySelector('[data-plugin-package]') as HTMLElement
+    const message = en.updatePreparedVersion.replace('{version}', '1.0.0')
+    expect(within(card).getByText('v0.16.0')).toBeTruthy()
+    expect(within(card).getByText(message)).toBeTruthy()
+    expect(within(card).queryByText('v1.0.0')).toBeNull()
+    expect(within(card).queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+    expect(within(card).queryByRole('button', { name: en.updateLabel.replace('{name}', name) })).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: en.openDetail.replace('{name}', name) }))
+    const detail = document.querySelector('[data-plugin-detail]') as HTMLElement
+    expect(within(detail).getByText('v0.16.0')).toBeTruthy()
+    expect(within(detail).getByText(message)).toBeTruthy()
+    expect(within(detail).queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+    expect(actions.checkUpdate).not.toHaveBeenCalled()
+    expect(actions.openUpdate).not.toHaveBeenCalled()
+  })
+
+  it('offers discard beside the prepared version in cards and details and uses the shared confirmation', () => {
+    const { actions, set, setLanguage } = renderTab({ packages: [pkg({ pendingUpdate: { id: 'prepared-1', version: '1.0.0' } })] })
+    const label = en.discardUpdateLabel.replace('{name}', name)
+    const card = document.querySelector('[data-plugin-package]') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: label }))
+    expect(actions.discardUpdate).toHaveBeenCalledExactlyOnceWith(name)
+    expect(document.querySelector('[data-plugin-detail]')).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: en.openDetail.replace('{name}', name) }))
+    const detail = document.querySelector('[data-plugin-detail]') as HTMLElement
+    fireEvent.click(within(detail).getByRole('button', { name: label }))
+    expect(actions.discardUpdate).toHaveBeenCalledTimes(2)
+    set({ confirm: { action: 'discardUpdate', packageName: name } })
+    const dialog = screen.getByRole('dialog', { name: en.confirmDiscardUpdateTitle.replace('{name}', name) })
+    expect(within(dialog).getByText(en.confirmDiscardUpdateDescription)).toBeTruthy()
+    expect(within(dialog).queryByText(en.confirmUninstallDescription)).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: en.cancel }))
+    expect(actions.cancelConfirm).toHaveBeenCalledOnce()
+    fireEvent.click(within(dialog).getByRole('button', { name: en.discardUpdate }))
+    expect(actions.confirm).toHaveBeenCalledOnce()
+    setLanguage(zh)
+    expect(screen.getByRole('dialog', { name: zh.confirmDiscardUpdateTitle.replace('{name}', name) })).toBeTruthy()
+    expect(screen.getByText(zh.confirmDiscardUpdateDescription)).toBeTruthy()
+  })
+
+  it('disables discard while busy or protected and hides it when no persisted pending id is available', () => {
+    const prepared = pkg({ pendingUpdate: { id: 'prepared-1', version: '1.0.0' } })
+    const { set } = renderTab({ packages: [prepared], busy: [name] })
+    const label = en.discardUpdateLabel.replace('{name}', name)
+    expect(screen.getByRole('button', { name: label })).toHaveProperty('disabled', true)
+    set({ packages: [{ ...prepared, readOnlyReason: 'management-required' }], busy: [] })
+    expect(screen.getByRole('button', { name: label })).toHaveProperty('disabled', true)
+    set({ packages: [pkg()], updates: { [name]: { status: 'restart', currentVersion: '0.16.0', stagedVersion: '1.0.0' } } })
+    expect(screen.queryByRole('button', { name: label })).toBeNull()
+    set({ packages: [{ ...prepared, installed: false }] })
+    expect(screen.queryByRole('button', { name: label })).toBeNull()
+  })
+
+  it('confirms a fixed candidate in the existing dialog and closes a completed update without enabling', () => {
+    const update = { name, currentVersion: '0.16.0', candidate: available }
+    const { actions, set } = renderTab({
+      install: { ...IDLE_INSTALL, open: true, spec: available.spec, update },
+    })
+    expect(screen.getByRole('dialog', { name: en.updateTitle })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: en.installSpecLabel })).toHaveProperty('readOnly', true)
+    expect(screen.getByText(en.updateConfirmDescription.replace('{name}', name).replace('{current}', '0.16.0').replace('{version}', '1.0.0'))).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en.updateAction }))
+    expect(actions.runInstall).toHaveBeenCalledTimes(1)
+    set({ install: { ...IDLE_INSTALL, open: true, update, spec: available.spec, phase: 'done', installed: name, restartRequired: true } })
+    expect(screen.getByText(en.updatedTitle)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: en.installEnableNow })).toBeNull()
+    expect(screen.getByText(en.updateRestart)).toBeTruthy()
+    expect(screen.queryByText(en.installDoneRestart)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: en.installClose }))
+    expect(actions.closeInstall).toHaveBeenCalledTimes(1)
+    expect(actions.enableInstalled).not.toHaveBeenCalled()
+  })
+
+  it('offers editable input for manual sources and keeps restoration failure visible', () => {
+    const update = { name, currentVersion: '0.16.0' }
+    const { actions, set } = renderTab({ install: { ...IDLE_INSTALL, open: true, update } })
+    const field = screen.getByRole('textbox', { name: en.installSpecLabel })
+    expect(field).toHaveProperty('readOnly', false)
+    expect(screen.getByText(en.updateManualDescription.replace('{name}', name).replace('{version}', '0.16.0'))).toBeTruthy()
+    fireEvent.change(field, { target: { value: '/packs/new.tgz' } })
+    expect(actions.editInstallSpec).toHaveBeenCalledWith('/packs/new.tgz')
+    set({ install: { ...IDLE_INSTALL, open: true, update, phase: 'failed', failure: { code: 'restore-failed', kind: 'integrity', reason: 'original tree missing' } } })
+    expect(screen.getByText(en.updateFailedTitle)).toBeTruthy()
+    expect(screen.getByText(`${en.reasonRestoreFailed} original tree missing`)).toBeTruthy()
+    expect(screen.queryByText(en.updatedTitle)).toBeNull()
+    set({ install: { ...IDLE_INSTALL, open: true, update, phase: 'failed', failure: { code: 'pending-update', kind: 'network', reason: '' } } })
+    expect(screen.getByText(en.reasonPendingUpdate)).toBeTruthy()
+  })
+})
 
 /**
  * Slot entries a test supplies: what each slot cell renders, by `<slot>:<cell>`
@@ -105,6 +246,9 @@ function renderTab(
     ensure: vi.fn(),
     refresh: vi.fn(),
     openInstall: vi.fn(),
+    checkUpdate: vi.fn(),
+    openUpdate: vi.fn(),
+    discardUpdate: vi.fn(),
     closeInstall: vi.fn(),
     editInstallSpec: vi.fn(),
     runInstall: vi.fn(),
@@ -1746,6 +1890,12 @@ describe('PluginManagerPage', () => {
         const key = ({ done: 'installBackgroundDone', failed: 'installBackgroundFailed', unconfirmed: 'installBackgroundUnconfirmed', applying: 'installBackgroundApplying', unknown: 'installBackgroundUnknown' } as const)[outcome]
         expect(screen.getByRole('alert').textContent).toContain(en[key])
       }
+      set({ notice: { kind: 'install', outcome: 'done', update: true, seq: 15 } })
+      expect(screen.getByRole('alert').textContent).toContain(en.updateRestart)
+      expect(screen.getByRole('alert').textContent).not.toContain(en.installBackgroundDone)
+      set({ notice: { kind: 'cancelled', update: true, seq: 16 } })
+      expect(screen.getByRole('alert').textContent).toContain(en.updateCancelled)
+      expect(screen.getByRole('alert').textContent).not.toContain(en.installCancelled)
       // No button to press: the toast retires on its own and the store forgets it.
       expect(screen.queryByRole('button', { name: /got it/i })).toBeNull()
       expect(actions.dismissNotice).not.toHaveBeenCalled()

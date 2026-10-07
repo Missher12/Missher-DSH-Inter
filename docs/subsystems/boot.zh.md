@@ -20,6 +20,10 @@
 
 `InstallBundleOptions.enabled` 默认为 true，false 表示安装但不选择组合包层。`approvedBuilds` 在安装前向指定的待审批包名授予持久脚本权限。`registry` 指定首先询问的注册表；缺省为配置的那个。
 
+`BundleUpdateCheck` 区分精确注册表新版候选、当前无新版、手动来源和拒绝结果，并保留当前版本及检查来源。`UpdateBundleOptions` 必须提供 `expectedVersion`，沿用安装选项中的请求标识、注册表和脚本批准，不接受启停覆盖。
+
+`BundleInfo.pendingUpdate` 用 `id` 和目标 `version` 标识一次已准备更新；已安装的 `version` 直到重启应用后才改变。`ChangeResult.stagedVersion` 表示成功准备的目标版本；`discardBundleUpdate` 归档前核对精确 pending id。
+
 `PluginRegistries` 携带配置的第一个注册表（`null` 即 pnpm 自身配置指定的那个）、随后依次询问的备选注册表，以及 `resolved`——pnpm 自身配置指向的 URL，未读到时为 `null`。`InspectOptions.registry` 指定一次查询首先询问的注册表。
 
 `ChangeResult.changed` 报告磁盘修改，独立于 `application`：`applied`、`restart-required`、`overridden` 或 `failed`。可选的 `error` 包含可本地化的错误码和外部诊断。`packageResult` 记录 pnpm 退出码、有界输出、截断标志及完整诊断日志路径；当管理器终止了一个停止打印的运行，还记录 `timedOut`。被终止的运行不论信号留下什么退出状态都归类为 `timeout`，因此安装与删除都报告失败而非成功，也不会再询问下一个注册表。`pendingBuilds` 列出整个 profile 尚未决定的包；`approvedBuilds` 记录本次操作授予权限的包名；`registries` 按顺序列出一次安装问过的注册表；`failedAt` 说明最后一次失败的运行连不上的是所问的注册表，还是 git 或 tarball spec 自身拉取的主机。
@@ -164,7 +168,7 @@ Manage profile files and apply their declared reload lifecycle.
  * @returns Package versions, manifest descriptions, rows, optional display metadata, activation selections,
  * whether the installation offers the bundle, and removal availability.
  */
-@Remote listBundles(): Promise<BundleInfo[]>
+@Remote async listBundles(): Promise<BundleInfo[]>
 
 /** Read the registries this manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names.
  * @returns The registries in pnpm's comparison form; null is the one pnpm's own configuration names, `resolved` as pnpm reads it now.
@@ -178,6 +182,36 @@ Manage profile files and apply their declared reload lifecycle.
  * @returns The package the spec names, or why it is refused.
  */
 @Remote async inspect(spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection>
+
+/** Check the selected bundle at its profile registry without installing or changing configuration.
+ * @param name Profile-owned bundle package name.
+ * @returns An exact newer registry spec, the current version, a manual source, or a refusal.
+ */
+@Remote async checkBundleUpdate(name: string): Promise<BundleUpdateCheck>
+
+/** Inspect a replacement for one installed bundle; unresolved Git/tarball identity is checked after fetching.
+ * @param name Exact installed target, never inferred from the replacement spec.
+ * @param spec Replacement package spec.
+ * @param options Registry selected by the caller; absence uses the profile registry.
+ * @param signal Ends a registry lookup early.
+ * @returns Accepted metadata or a different-package, non-update, or ordinary inspection refusal.
+ */
+@Remote async inspectBundleUpdate(name: string, spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection>
+
+/** Prepare an isolated update for a profile-owned bundle, preserving its running version, selection and configuration.
+ * @param name Exact installed bundle package name.
+ * @param spec Replacement package spec, pinned for automatic registry updates.
+ * @param options Expected installed version, request identity, script approvals and registry.
+ * @returns Candidate diagnostics and stagedVersion after atomic pending publication; Desktop activates it only after a clean Host exit.
+ */
+@Remote updateBundle(name: string, spec: string, options: UpdateBundleOptions): Promise<ChangeResult>
+
+/** Archive one still-pending update without changing the running dependency graph.
+ * @param name Exact target package shown by listBundles.
+ * @param expectedId Pending descriptor id shown by listBundles.
+ * @returns Applied after the descriptor is archived; stale ids or an activation already started are refused.
+ */
+@Remote discardBundleUpdate(name: string, expectedId: string): Promise<ChangeResult>
 
 /** Persist a plugin entry's desired enablement and apply it on live profiles.
  * @param id Loader entry identity returned by listPlugins.
@@ -196,9 +230,10 @@ Manage profile files and apply their declared reload lifecycle.
 /**
  * Install a package using the same pnpm implementation as dsh plugin. GitHub
  * repositories get a connection check bounded by githubConnectionTimeoutMs before pnpm starts;
- * only network failures or timeouts stop installation, while pnpm owns authentication and transport fallback. A run
+ * only network failures or timeouts stop that check. Git uses pnpm authentication; remote tarballs are captured
+ * once with HTTP fetch, so URLs requiring pnpm-specific authentication must be supplied as a local tarball. A run
  * that fails, is cancelled, or adds a package without a bundle patch restores
- * `package.json` and `pnpm-lock.yaml` as they were; downloaded files can stay.
+ * `package.json` and `pnpm-lock.yaml`; installing a newer existing bundle uses the separate staged update path.
  * @param spec One package spec, including local paths relative to the invocation directory.
  * @param options Whether to activate the installed bundle (defaults to true), the request id a cancellation names,
  * the pending build scripts to allow for this profile before pnpm runs, and the registry asked first.
@@ -213,10 +248,10 @@ Manage profile files and apply their declared reload lifecycle.
  */
 @Remote async waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null>
 
-/** Stop an installation this manager owns and wait until its files are back.
+/** Stop an installation or update preparation this manager owns and await its cleanup.
  * @param requestId The id the installation was started with.
- * @returns `cancelled` once the Git check or pnpm exited and the files are restored, `too-late` once the bundle is being
- * applied, `not-running` for any other id.
+ * @returns `cancelled` after process exit and cleanup, `too-late` during activation or pending publication,
+ * `not-running` for any other id, or `failed` when the operation could not clean up safely.
  */
 @Remote async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation>
 

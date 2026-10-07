@@ -1186,6 +1186,24 @@ label.registryOption {
   font-variant-numeric: tabular-nums;
 }
 
+/* Keep update controls above the card's full-area detail link. */
+.updateControls {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.updateMessage {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 .detailDesc {
   margin: 0;
   color: var(--dsw-alias-label-secondary);

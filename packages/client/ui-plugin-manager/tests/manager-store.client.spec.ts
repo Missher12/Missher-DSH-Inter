@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import type { BundleInfo, ChangeResult, ManagementError, PluginEntryId, PluginInfo, PluginInstallRequestId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { BundleInfo, BundleUpdateCheck, ChangeResult, ManagementError, PluginEntryId, PluginInfo, PluginInstallRequestId, PluginSpecInspection } from '@deepseek-ai/dsh-api-remotes/client'
 import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigLedger } from '../src/client/config-ledger.ts'
@@ -72,13 +72,29 @@ const NO_CONFIG: HostObservable<ConfigLedger> = {
 }
 
 function bench(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}, enabled = true) {
+  let pendingVersion: string | undefined
   const inventory = { list: overrides.inventory ?? vi.fn(() => Promise.resolve(ok({ entries: [], managementAvailable: true }))) }
   const plugins = {
     listBundles: vi.fn<() => Promise<ReturnType<typeof ok<BundleInfo[]>> | ReturnType<typeof refused>>>(
-      () => Promise.resolve(ok([BUNDLE])),
+      () => Promise.resolve(ok([{ ...BUNDLE, ...pendingVersion === undefined ? {} : { pendingUpdate: { id: 'prepared-1', version: pendingVersion } } }])),
     ),
     listPlugins: vi.fn(() => Promise.resolve(ok(PLUGINS))),
     inspect: vi.fn(() => Promise.resolve(ok(INSPECTED))),
+    checkBundleUpdate: vi.fn<() => Promise<ReturnType<typeof ok<BundleUpdateCheck>> | ReturnType<typeof refused>>>(
+      () => Promise.resolve(ok({
+        status: 'available', currentVersion: '0.16.0', version: INSPECTED.version,
+        spec: `${BUNDLE.name}@${INSPECTED.version}`, registry: null,
+      })),
+    ),
+    inspectBundleUpdate: vi.fn(() => Promise.resolve(ok(INSPECTED))),
+    updateBundle: vi.fn(() => {
+      pendingVersion = INSPECTED.version
+      return Promise.resolve(ok({ ...APPLIED, application: 'restart-required' as const, bundle: BUNDLE.name, stagedVersion: pendingVersion }))
+    }),
+    discardBundleUpdate: vi.fn(() => {
+      pendingVersion = undefined
+      return Promise.resolve(ok(APPLIED))
+    }),
     registries: vi.fn(() => Promise.resolve(ok(REGISTRIES))),
     installBundle: vi.fn(() => Promise.resolve(ok({ ...APPLIED, bundle: 'dsh-new' }))),
     waitForInstall: vi.fn(() => Promise.resolve(refused('gateway/internal', 'offline'))),
@@ -110,6 +126,335 @@ function bench(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}
 it('hands a custom page the shared configuration form of its entry', () => {
   const { face } = bench()
   expect(face.configForm('bundle#row')).toBe('form:bundle#row' as never)
+})
+
+describe('installed package updates', () => {
+  const available: Extract<BundleUpdateCheck, { status: 'available' }> = {
+    status: 'available', currentVersion: '0.16.0', version: '1.0.0', spec: `${BUNDLE.name}@1.0.0`, registry: null,
+  }
+
+  it('checks only on demand, folds duplicate clicks, and never installs during a check', async () => {
+    const gate = deferred<ReturnType<typeof ok<BundleUpdateCheck>>>()
+    const { controller, face, plugins, state } = bench({ checkBundleUpdate: vi.fn().mockReturnValue(gate.promise) })
+    await controller.load()
+    expect(plugins.checkBundleUpdate).not.toHaveBeenCalled()
+    face.checkUpdate(BUNDLE.name)
+    face.checkUpdate(BUNDLE.name)
+    expect(plugins.checkBundleUpdate).toHaveBeenCalledTimes(1)
+    expect(state().updates[BUNDLE.name]).toMatchObject({ status: 'checking' })
+    gate.resolve(ok(available))
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]).toEqual(available) })
+    expect(plugins.installBundle).not.toHaveBeenCalled()
+    expect(plugins.updateBundle).not.toHaveBeenCalled()
+    expect(state().install.open).toBe(false)
+  })
+
+  it('confirms the pinned candidate, retains its registry and preserves a disabled bundle', async () => {
+    const checked = { ...available, registry: CORP }
+    const { controller, face, plugins, state } = bench({
+      checkBundleUpdate: vi.fn().mockResolvedValue(ok(checked)),
+      inspectBundleUpdate: vi.fn().mockResolvedValue(ok({ ...INSPECTED, registry: CORP })),
+    })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]).toEqual(checked) })
+    face.openUpdate(BUNDLE.name)
+    expect(state().install).toMatchObject({ open: true, spec: checked.spec, update: { currentVersion: '0.16.0', candidate: checked } })
+    expect(plugins.updateBundle).not.toHaveBeenCalled()
+    face.editInstallSpec('different-package')
+    face.chooseRegistry({ kind: 'offered', registry: MIRROR })
+    expect(state().install.spec).toBe(checked.spec)
+    expect(state().install.registry).toEqual({ kind: 'offered', registry: CORP })
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    expect(plugins.inspectBundleUpdate).toHaveBeenCalledWith(BUNDLE.name, checked.spec, { registry: CORP }, expect.any(AbortSignal))
+    expect(plugins.updateBundle).toHaveBeenCalledWith(BUNDLE.name, checked.spec, {
+      expectedVersion: '0.16.0', registry: CORP, requestId: expect.any(String) as PluginInstallRequestId,
+    })
+    expect(plugins.installBundle).not.toHaveBeenCalled()
+    face.enableInstalled()
+    expect(plugins.setBundleEnabled).not.toHaveBeenCalled()
+    expect(state().packages[0]?.enabled).toBe(false)
+    expect(state().packages[0]?.version).toBe('0.16.0')
+    expect(state().updates[BUNDLE.name]).toMatchObject({ status: 'restart', stagedVersion: INSPECTED.version })
+    face.closeInstall()
+    await controller.load()
+    expect(state().updates[BUNDLE.name]?.status).toBe('restart')
+  })
+
+  it('recovers prepared updates from persisted inventory after a new page load and clears them after restart', async () => {
+    const listBundles = vi.fn().mockResolvedValue(ok([{ ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }]))
+    for (let reload = 0; reload < 2; reload++) {
+      const { controller, face, plugins, state } = bench({ listBundles })
+      await controller.load()
+      expect(state().packages[0]?.version).toBe('0.16.0')
+      expect(state().updates[BUNDLE.name]).toEqual({ status: 'restart', currentVersion: '0.16.0', stagedVersion: '1.0.0' })
+      face.checkUpdate(BUNDLE.name)
+      face.openUpdate(BUNDLE.name)
+      expect(plugins.checkBundleUpdate).not.toHaveBeenCalled()
+      expect(plugins.updateBundle).not.toHaveBeenCalled()
+      expect(state().install.open).toBe(false)
+      if (reload === 1) {
+        listBundles.mockResolvedValueOnce(ok([{ ...BUNDLE, version: '1.0.0' }]))
+        await controller.load()
+        expect(state().updates[BUNDLE.name]).toBeUndefined()
+        expect(state().packages[0]?.version).toBe('1.0.0')
+        face.checkUpdate(BUNDLE.name)
+        expect(plugins.checkBundleUpdate).toHaveBeenCalledOnce()
+      }
+      controller.dispose()
+    }
+  })
+
+  it('confirms abandoning the exact prepared update and refreshes without changing the installed version', async () => {
+    const { controller, face, plugins, state } = bench()
+    plugins.listBundles.mockResolvedValueOnce(ok([{ ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }]))
+    await controller.load()
+    face.discardUpdate(BUNDLE.name)
+    expect(state().confirm).toEqual({ action: 'discardUpdate', packageName: BUNDLE.name })
+    expect(plugins.discardBundleUpdate).not.toHaveBeenCalled()
+    face.cancelConfirm()
+    face.confirm()
+    expect(plugins.discardBundleUpdate).not.toHaveBeenCalled()
+    face.discardUpdate(BUNDLE.name)
+    face.confirm()
+    face.confirm()
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]).toBeUndefined() })
+    expect(plugins.discardBundleUpdate).toHaveBeenCalledExactlyOnceWith(BUNDLE.name, 'prepared-1')
+    expect(state().packages[0]).toMatchObject({ version: '0.16.0', enabled: false })
+    expect(state().packages[0]?.pendingUpdate).toBeUndefined()
+    expect(plugins.setBundleEnabled).not.toHaveBeenCalled()
+    expect(plugins.removeBundle).not.toHaveBeenCalled()
+    face.checkUpdate(BUNDLE.name)
+    expect(plugins.checkBundleUpdate).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the confirmation bound to its original pending id and refreshes after a stale refusal', async () => {
+    const first = { ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }
+    const second = { ...BUNDLE, pendingUpdate: { id: 'prepared-2', version: '1.1.0' } }
+    const { controller, face, plugins, state } = bench({
+      listBundles: vi.fn().mockResolvedValueOnce(ok([first])).mockResolvedValue(ok([second])),
+      discardBundleUpdate: vi.fn().mockResolvedValue(ok(failed({ code: 'stale-update' }))),
+    })
+    await controller.load()
+    face.discardUpdate(BUNDLE.name)
+    await controller.load()
+    face.confirm()
+    await vi.waitFor(() => { expect(state().notice).toMatchObject({ kind: 'failed', action: 'discardUpdate', code: 'stale-update' }) })
+    await vi.waitFor(() => { expect(plugins.listBundles).toHaveBeenCalledTimes(3) })
+    expect(plugins.discardBundleUpdate).toHaveBeenCalledExactlyOnceWith(BUNDLE.name, 'prepared-1')
+    expect(state().packages[0]?.pendingUpdate).toEqual(second.pendingUpdate)
+    expect(state().updates[BUNDLE.name]).toMatchObject({ status: 'restart', stagedVersion: '1.1.0' })
+  })
+
+  it('keeps pending visible through an unconfirmed discard and reports the transport failure', async () => {
+    const gate = deferred<ReturnType<typeof refused>>()
+    const pending = { ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }
+    const { controller, face, plugins, state } = bench({
+      listBundles: vi.fn().mockResolvedValue(ok([pending])),
+      discardBundleUpdate: vi.fn().mockReturnValue(gate.promise),
+    })
+    await controller.load()
+    face.discardUpdate(BUNDLE.name)
+    face.confirm()
+    expect(state().busy).toContain(BUNDLE.name)
+    expect(state().packages[0]?.pendingUpdate).toEqual(pending.pendingUpdate)
+    face.discardUpdate(BUNDLE.name)
+    expect(state().confirm).toBeNull()
+    gate.resolve(refused('gateway/internal', 'offline'))
+    await vi.waitFor(() => { expect(state().notice).toMatchObject({ kind: 'failed', action: 'discardUpdate', reason: 'offline' }) })
+    await vi.waitFor(() => { expect(state().busy).toEqual([]) })
+    expect(plugins.discardBundleUpdate).toHaveBeenCalledOnce()
+    expect(state().packages[0]?.pendingUpdate).toEqual(pending.pendingUpdate)
+  })
+
+  it.each(['absent', 'shipped', 'protected'] as const)('does not discard an %s prepared update', async (kind) => {
+    const item: BundleInfo = kind === 'absent' ? BUNDLE : { ...BUNDLE,
+      pendingUpdate: { id: 'prepared-1', version: '1.0.0' },
+      ...kind === 'shipped' ? { installed: false } : { readOnlyReason: 'management-required' },
+    }
+    const { controller, face, plugins, state } = bench({ listBundles: vi.fn().mockResolvedValue(ok([item])) })
+    await controller.load()
+    face.discardUpdate(BUNDLE.name)
+    face.confirm()
+    expect(state().confirm).toBeNull()
+    expect(plugins.discardBundleUpdate).not.toHaveBeenCalled()
+  })
+
+  it.each(['confirmation', 'inspection'] as const)('blocks a pending update discovered during an old %s', async (phase) => {
+    const inspection = deferred<ReturnType<typeof ok<PluginSpecInspection>>>()
+    const { controller, face, plugins, state } = bench({ inspectBundleUpdate: vi.fn().mockReturnValue(inspection.promise) })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    if (phase === 'inspection') {
+      face.runInstall()
+      await vi.waitFor(() => { expect(plugins.inspectBundleUpdate).toHaveBeenCalledOnce() })
+    }
+    plugins.listBundles.mockResolvedValueOnce(ok([{ ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }]))
+    await controller.load()
+    if (phase === 'confirmation') face.runInstall()
+    else inspection.resolve(ok(INSPECTED))
+    await vi.waitFor(() => { expect(state().install.failure?.code).toBe('pending-update') })
+    expect(state().install.phase).toBe('failed')
+    expect(plugins.updateBundle).not.toHaveBeenCalled()
+  })
+
+  it.each(['path', 'git', 'tarball'] as const)('offers explicit input for a %s source without claiming it is current', async (source) => {
+    const manual = { status: 'manual' as const, currentVersion: '0.16.0', source }
+    const { controller, face, plugins, state } = bench({ checkBundleUpdate: vi.fn().mockResolvedValue(ok(manual)) })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]).toEqual(manual) })
+    face.openUpdate(BUNDLE.name)
+    expect(state().install).toMatchObject({ spec: '', update: { name: BUNDLE.name, currentVersion: '0.16.0' } })
+    face.editInstallSpec('/packs/plugin-1.0.0.tgz')
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    expect(plugins.inspectBundleUpdate).toHaveBeenCalledWith(BUNDLE.name, '/packs/plugin-1.0.0.tgz', { registry: null }, expect.any(AbortSignal))
+    expect(plugins.inspect).not.toHaveBeenCalled()
+  })
+
+  it('does not open updates for current versions, refused checks, shipped or protected packages', async () => {
+    const { controller, face, state, plugins } = bench()
+    await controller.load()
+    plugins.checkBundleUpdate.mockResolvedValueOnce(ok({ status: 'current', currentVersion: '0.16.0' }))
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('current') })
+    face.openUpdate(BUNDLE.name)
+    expect(state().install.open).toBe(false)
+    plugins.checkBundleUpdate.mockResolvedValueOnce(ok({ status: 'refused', error: { code: 'not-updatable' } }))
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('refused') })
+    face.openUpdate(BUNDLE.name)
+    expect(state().install.open).toBe(false)
+    plugins.listBundles.mockResolvedValueOnce(ok([{ ...BUNDLE, installed: false }]))
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    plugins.listBundles.mockResolvedValueOnce(ok([{ ...BUNDLE, readOnlyReason: 'management-required' }]))
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    expect(plugins.checkBundleUpdate).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['changed', 'removed', 'disposed', 'pending'] as const)('drops an update result after inventory is %s', async (change) => {
+    const gate = deferred<ReturnType<typeof ok<BundleUpdateCheck>>>()
+    const { controller, face, plugins, state } = bench({ checkBundleUpdate: vi.fn().mockReturnValue(gate.promise) })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    if (change === 'disposed') controller.dispose()
+    else {
+      plugins.listBundles.mockResolvedValueOnce(ok(change === 'removed' ? [] : change === 'pending'
+        ? [{ ...BUNDLE, pendingUpdate: { id: 'prepared-1', version: '1.0.0' } }] : [{ ...BUNDLE, version: '2.0.0' }]))
+      await controller.load()
+    }
+    const before = state()
+    gate.resolve(ok(available))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(state()).toBe(before)
+    face.openUpdate(BUNDLE.name)
+    expect(state().install.open).toBe(false)
+  })
+
+  it('keeps a failed check retryable and blocks an inspection refusal before update', async () => {
+    const { controller, face, plugins, state } = bench({
+      checkBundleUpdate: vi.fn().mockResolvedValueOnce(refused('gateway/internal', 'offline')).mockResolvedValueOnce(ok(available)),
+      inspectBundleUpdate: vi.fn().mockResolvedValue(ok({ status: 'refused', problem: 'not-newer', reason: 'same version' })),
+    })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]).toMatchObject({ status: 'failed', reason: 'offline' }) })
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.inputError).toMatchObject({ problem: 'not-newer' }) })
+    expect(plugins.updateBundle).not.toHaveBeenCalled()
+  })
+
+  it('keeps the update identity through script approval and retry', async () => {
+    const { controller, face, state, plugins } = bench({
+      updateBundle: vi.fn().mockResolvedValueOnce(ok({
+        ...failed(), pendingBuilds: ['native-helper'],
+      })).mockResolvedValueOnce(ok({ ...APPLIED, application: 'restart-required', bundle: BUNDLE.name })),
+    })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('failed') })
+    face.approveBuildsAndRetry()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('done') })
+    expect(plugins.updateBundle).toHaveBeenLastCalledWith(BUNDLE.name, available.spec, {
+      expectedVersion: '0.16.0', registry: null, requestId: expect.any(String) as PluginInstallRequestId, approvedBuilds: ['native-helper'],
+    })
+    expect(plugins.installBundle).not.toHaveBeenCalled()
+  })
+
+  it('reports failed restoration as failure and never offers activation or success', async () => {
+    const { controller, face, state, plugins } = bench({
+      updateBundle: vi.fn().mockResolvedValue(ok(failed({ code: 'restore-failed', diagnostic: 'original tree unavailable' }))),
+    })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    face.runInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('failed') })
+    expect(state().install.failure).toMatchObject({ code: 'restore-failed', reason: 'original tree unavailable' })
+    expect(state().install.installed).toBeNull()
+    expect(state().updates[BUNDLE.name]?.status).not.toBe('restart')
+    expect(plugins.setBundleEnabled).not.toHaveBeenCalled()
+  })
+
+  it('cancels an update through its request id and ignores a late successful reply', async () => {
+    const gate = deferred<ReturnType<typeof ok<ChangeResult>>>()
+    const { controller, face, plugins, state, started } = bench({ updateBundle: vi.fn().mockReturnValue(gate.promise) })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    face.runInstall()
+    const requestId = await started()
+    controller.installProgress({ requestId, phase: 'installing' })
+    face.cancelInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('idle') })
+    expect(plugins.cancelInstall).toHaveBeenCalledWith(requestId)
+    expect(state().notice).toMatchObject({ kind: 'cancelled', update: true })
+    expect(state().install.update?.currentVersion).toBe('0.16.0')
+    gate.resolve(ok({ ...APPLIED, bundle: BUNDLE.name, application: 'restart-required' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(state().install.phase).toBe('idle')
+    expect(state().updates[BUNDLE.name]?.status).not.toBe('restart')
+  })
+
+  it('reports cancellation restoration failure even when it overtakes the original reply', async () => {
+    const gate = deferred<ReturnType<typeof ok<ChangeResult>>>()
+    const error: ManagementError = { code: 'restore-failed', diagnostic: 'previous package could not be restored' }
+    const { controller, face, state, started } = bench({
+      updateBundle: vi.fn().mockReturnValue(gate.promise),
+      cancelInstall: vi.fn().mockResolvedValue(ok({ status: 'failed', error })),
+    })
+    await controller.load()
+    face.checkUpdate(BUNDLE.name)
+    await vi.waitFor(() => { expect(state().updates[BUNDLE.name]?.status).toBe('available') })
+    face.openUpdate(BUNDLE.name)
+    face.runInstall()
+    const requestId = await started()
+    controller.installProgress({ requestId, phase: 'installing' })
+    face.cancelInstall()
+    await vi.waitFor(() => { expect(state().install.phase).toBe('failed') })
+    expect(state().install.failure).toMatchObject({ code: 'restore-failed', reason: error.diagnostic })
+    expect(state().notice?.kind).not.toBe('cancelled')
+    gate.resolve(ok(failed(error)))
+    await Promise.resolve()
+    expect(state().install.phase).toBe('failed')
+    expect(state().install.failure?.code).toBe('restore-failed')
+  })
 })
 
 describe('packageView', () => {

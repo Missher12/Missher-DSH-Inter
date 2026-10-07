@@ -26,6 +26,7 @@ import {
 import { resolveDesktopPaths } from './paths.ts'
 import { DesktopProjectManager } from './project-manager.ts'
 import { DesktopHostFatalError, DesktopHostProcess, DesktopHostUncleanExitError } from './host-process.ts'
+import { capturePendingPluginStop, consumePendingPluginUpdate, recordPendingPluginCleanStop, type PendingPluginStop } from './pending-plugin-update.ts'
 import { DesktopPlatformView, PLATFORM_IPC, platformBounds } from './platform-view.ts'
 import { installDesktopDirectoryPicker } from './directory-picker.ts'
 import { installMicrophonePermissions } from './microphone-permissions.ts'
@@ -461,6 +462,7 @@ async function main(): Promise<void> {
   let returnedAttempt: string | undefined
   let pendingWelcomeNotice: WelcomeNotice | undefined
   let previousAccountStatus: string | undefined
+  let pendingPluginNotice: string | undefined
   const assertProductSender = (event: IpcMainInvokeEvent): void => {
     assertDesktopSender(event, ['app'])
     if (mainWindow === undefined || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents
@@ -485,6 +487,22 @@ async function main(): Promise<void> {
   }
   const platformView = new DesktopPlatformView(join(app.getAppPath(), 'lib', 'preload-platform-account.cjs'),
     () => locale.id === 'zh-CN' ? 'zh_CN' : 'en_US', process.platform === 'win32' ? 'win32' : 'darwin')
+  const preparePendingPluginUpdate = async (): Promise<void> => {
+    const prepared = await consumePendingPluginUpdate(activeProject)
+    if (prepared.status === 'deferred' && pendingPluginNotice !== `${prepared.id}:${prepared.reason}`) {
+      pendingPluginNotice = `${prepared.id}:${prepared.reason}`
+      const zh = locale.id === 'zh-CN'
+      const reason = {
+        'unclean-stop': zh ? '尚未确认 Host 正常退出。请正常退出应用后重新打开。' : 'A clean Host shutdown has not been confirmed. Quit the application normally, then reopen it.',
+        'base-changed': zh ? '当前插件或配置已改变，准备好的更新与当前安装不再一致。' : 'The current plugins or configuration changed after this update was prepared.',
+        'candidate-changed': zh ? '准备好的更新文件已改变，无法安全应用。' : 'The prepared update files changed and cannot be safely applied.',
+        'apply-failed': zh ? '更新切换未完成，已恢复原安装；请正常退出后再重试。' : 'The update could not be applied. The previous installation was restored; quit normally before retrying.',
+      }[prepared.reason]
+      void dialog.showMessageBox({ type: 'warning', title: zh ? '插件更新等待重启' : 'Plugin update pending',
+        message: zh ? '继续使用当前插件版本' : 'Continuing with the current plugin version', detail: reason,
+        buttons: [zh ? '知道了' : 'OK'] }).catch((error: unknown) => { console.error(error) })
+    }
+  }
   const backend = new DesktopBackendController((onFailure) => {
     browserFiles = new DesktopBrowserFiles(() => mainWindow)
     browserAutomation = createBrowserAutomation()
@@ -568,11 +586,23 @@ async function main(): Promise<void> {
         interactionStates.clear()
         analyticsEnabled = false
         stopAccount?.()
-        try { await host.stop(requireCleanStop) }
+        let pendingStop: PendingPluginStop | undefined
+        let pendingRequiresClean = false
+        try { pendingStop = await capturePendingPluginStop(activeProject); pendingRequiresClean = pendingStop !== undefined }
+        catch (error) { pendingRequiresClean = true; console.warn('Pending plugin update identity could not be read before shutdown', error) }
+        try {
+          await host.stop(requireCleanStop || pendingRequiresClean)
+          if (pendingStop !== undefined) {
+            // Failure to persist proof only defers this plugin update; it must not trap application exit.
+            try { await recordPendingPluginCleanStop(activeProject, pendingStop) }
+            catch (error) { console.warn('Pending plugin update clean-stop receipt was not recorded', error) }
+          }
+        }
         catch (error) {
-          if (!requireCleanStop || !(error instanceof DesktopHostUncleanExitError)) throw error
+          if ((!requireCleanStop && !pendingRequiresClean) || !(error instanceof DesktopHostUncleanExitError)) throw error
           // Backend cleanup succeeded; installation still rejects the unsuccessful task teardown.
-          updateStopFailure = error
+          if (requireCleanStop) updateStopFailure = error
+          else console.warn('Pending plugin update remains deferred after an unclean Host stop')
         }
       },
       updateTasks: (action: 'inspect' | 'lock' | 'unlock') => host.updateTasks(action),
@@ -609,7 +639,7 @@ async function main(): Promise<void> {
       updateStoppedHost = false
       if (restoreHost) {
         // Only confirmed process exit permits replacement before another installation confirmation.
-        const hostReady = backend.start(prepareHostEnvironment)
+        const hostReady = backend.start(async () => { await prepareHostEnvironment(); await preparePendingPluginUpdate() })
         startup = hostReady
         const recovery = hostReady.then(async () => {
           if (quitting) return
@@ -639,7 +669,9 @@ async function main(): Promise<void> {
     startup ??= (async () => {
       await navigateMain(applicationUrl)
       await backend.start(async () => {
-        await Promise.all([manager.applyRelease(), prepareHostEnvironment()])
+        // An interrupted plugin switch must be recovered before profile initialization can write its files.
+        await Promise.all([prepareHostEnvironment(), preparePendingPluginUpdate()])
+        await manager.applyRelease()
       })
       if (backend.host !== undefined) await openInitialWindow()
       if (backend.host !== undefined) updateJournal?.action('workspace-ready')

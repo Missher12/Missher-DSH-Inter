@@ -20,6 +20,10 @@ The [boot package group](../../packages/boot/README.md) owns launcher-provided p
 
 `InstallBundleOptions.enabled` defaults to true. False installs without selecting the bundle layer. `approvedBuilds` grants persistent script permission to the supplied pending package names before installation. `registry` names the registry asked first; absent, the configured one.
 
+`BundleUpdateCheck` distinguishes an exact newer registry candidate from current, manual-source and refused results. It retains the current version and the checked source. `UpdateBundleOptions` requires `expectedVersion` and inherits request identity, registry and script approvals from installation options; it does not accept an enablement override.
+
+`BundleInfo.pendingUpdate` identifies a prepared update by its `id` and target `version`; the installed `version` stays unchanged until restart applies it. `ChangeResult.stagedVersion` names a successfully prepared version. `discardBundleUpdate` checks that exact pending id before archiving it.
+
 `PluginRegistries` carries the configured first registry, `null` for the one pnpm's own configuration names, the fallbacks asked after it, and `resolved`, the URL pnpm's own configuration names or `null` while unread. `InspectOptions.registry` names the registry a lookup asks first.
 
 `ChangeResult.changed` reports a disk edit independently of `application`: `applied`, `restart-required`, `overridden` or `failed`. Optional `error` carries a localizable code and external diagnostic. `packageResult` records the pnpm exit code, bounded output, truncation flag and complete diagnostic log path, plus `timedOut` when the manager terminated a run that stopped printing. A terminated run is classified `timeout` whatever exit status the signal left behind, so installation and removal report failure instead of success and no further registry is asked. `pendingBuilds` lists undecided packages across the profile; `approvedBuilds` records the names granted permission by this operation; `registries` lists the registries an installation asked, in order; `failedAt` says whether the last failed run could not reach the registry it asked or the host a git or tarball spec is fetched from.
@@ -164,7 +168,7 @@ Manage profile files and apply their declared reload lifecycle.
  * @returns Package versions, manifest descriptions, rows, optional display metadata, activation selections,
  * whether the installation offers the bundle, and removal availability.
  */
-@Remote listBundles(): Promise<BundleInfo[]>
+@Remote async listBundles(): Promise<BundleInfo[]>
 
 /** Read the registries this manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names.
  * @returns The registries in pnpm's comparison form; null is the one pnpm's own configuration names, `resolved` as pnpm reads it now.
@@ -178,6 +182,36 @@ Manage profile files and apply their declared reload lifecycle.
  * @returns The package the spec names, or why it is refused.
  */
 @Remote async inspect(spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection>
+
+/** Check the selected bundle at its profile registry without installing or changing configuration.
+ * @param name Profile-owned bundle package name.
+ * @returns An exact newer registry spec, the current version, a manual source, or a refusal.
+ */
+@Remote async checkBundleUpdate(name: string): Promise<BundleUpdateCheck>
+
+/** Inspect a replacement for one installed bundle; unresolved Git/tarball identity is checked after fetching.
+ * @param name Exact installed target, never inferred from the replacement spec.
+ * @param spec Replacement package spec.
+ * @param options Registry selected by the caller; absence uses the profile registry.
+ * @param signal Ends a registry lookup early.
+ * @returns Accepted metadata or a different-package, non-update, or ordinary inspection refusal.
+ */
+@Remote async inspectBundleUpdate(name: string, spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection>
+
+/** Prepare an isolated update for a profile-owned bundle, preserving its running version, selection and configuration.
+ * @param name Exact installed bundle package name.
+ * @param spec Replacement package spec, pinned for automatic registry updates.
+ * @param options Expected installed version, request identity, script approvals and registry.
+ * @returns Candidate diagnostics and stagedVersion after atomic pending publication; Desktop activates it only after a clean Host exit.
+ */
+@Remote updateBundle(name: string, spec: string, options: UpdateBundleOptions): Promise<ChangeResult>
+
+/** Archive one still-pending update without changing the running dependency graph.
+ * @param name Exact target package shown by listBundles.
+ * @param expectedId Pending descriptor id shown by listBundles.
+ * @returns Applied after the descriptor is archived; stale ids or an activation already started are refused.
+ */
+@Remote discardBundleUpdate(name: string, expectedId: string): Promise<ChangeResult>
 
 /** Persist a plugin entry's desired enablement and apply it on live profiles.
  * @param id Loader entry identity returned by listPlugins.
@@ -196,9 +230,10 @@ Manage profile files and apply their declared reload lifecycle.
 /**
  * Install a package using the same pnpm implementation as dsh plugin. GitHub
  * repositories get a connection check bounded by githubConnectionTimeoutMs before pnpm starts;
- * only network failures or timeouts stop installation, while pnpm owns authentication and transport fallback. A run
+ * only network failures or timeouts stop that check. Git uses pnpm authentication; remote tarballs are captured
+ * once with HTTP fetch, so URLs requiring pnpm-specific authentication must be supplied as a local tarball. A run
  * that fails, is cancelled, or adds a package without a bundle patch restores
- * `package.json` and `pnpm-lock.yaml` as they were; downloaded files can stay.
+ * `package.json` and `pnpm-lock.yaml`; installing a newer existing bundle uses the separate staged update path.
  * @param spec One package spec, including local paths relative to the invocation directory.
  * @param options Whether to activate the installed bundle (defaults to true), the request id a cancellation names,
  * the pending build scripts to allow for this profile before pnpm runs, and the registry asked first.
@@ -213,10 +248,10 @@ Manage profile files and apply their declared reload lifecycle.
  */
 @Remote async waitForInstall(requestId: PluginInstallRequestId): Promise<ChangeResult | null>
 
-/** Stop an installation this manager owns and wait until its files are back.
+/** Stop an installation or update preparation this manager owns and await its cleanup.
  * @param requestId The id the installation was started with.
- * @returns `cancelled` once the Git check or pnpm exited and the files are restored, `too-late` once the bundle is being
- * applied, `not-running` for any other id.
+ * @returns `cancelled` after process exit and cleanup, `too-late` during activation or pending publication,
+ * `not-running` for any other id, or `failed` when the operation could not clean up safely.
  */
 @Remote async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation>
 

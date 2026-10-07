@@ -55,7 +55,15 @@ kind: "package-reference"
 
 `waitForInstall(requestId)` 让客户端在响应丢失后等待活动安装的结果，包括不可取消的应用阶段。它返回与原调用相同的结果，请求不在活动中时返回 `null`。已完成的结果不保留；`null` 不表示成功或已取消。
 
-pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 profile 中所有待决定的包名，包括先前尝试留下的；失败的运行会恢复 `package.json` 与 `pnpm-lock.yaml`，但有意不恢复 pnpm 记录这些名字的 `pnpm-workspace.yaml`。Web 插件页提供**允许这些脚本并重试**；工具可以在用户于对话中批准这些脚本后，通过 `install_bundle` 的 `approvedBuilds` 代为授权。服务只校验待决定的名字，不核实对话中的批准。授权按包名保存在当前 profile，允许以宿主用户的权限执行命令，并在再次安装失败后保留。只能批准当前未决定的名字；已有的拒绝与通配规则不能通过此操作覆盖。`allowBuilds` 里出现 YAML 锚点或别名时拒绝授权。重试保留原来的启用选择。
+pnpm 11 拦下依赖脚本时，失败的安装在 `pendingBuilds` 里报告 profile 中所有待决定的包名，包括先前尝试留下的；失败的运行会恢复 `package.json` 与 `pnpm-lock.yaml`，但有意不恢复 pnpm 记录这些名字的 `pnpm-workspace.yaml`。Web 插件页提供**允许这些脚本并重试**；工具可以在用户于对话中批准这些脚本后，通过 `install_bundle` 的 `approvedBuilds` 代为授权。服务只校验待决定的名字，不核实对话中的批准。授权按 pnpm 返回的待批准项保存在当前 profile（包名，或该版本 pnpm 返回的来源选择器），允许以宿主用户的权限执行命令，并在再次安装失败后保留。管理器只将选中项传给 pnpm 的非交互 `approve-builds` 命令，不会批准全部待执行脚本。只能批准当前未决定的名字；已有的拒绝与通配规则不能通过此操作覆盖。`allowBuilds` 里出现 YAML 锚点或别名时拒绝授权。重试保留原来的启用选择。
+
+`checkBundleUpdate` 只检查已安装包的注册表来源，返回精确新版候选、当前版本、手动来源或拒绝原因；不会写 profile 文件，也不会从仓库元数据推断发布包。`inspectBundleUpdate` 仅接受选定包；`updateBundle` 在 profile 锁内复核预期的已安装版本，并要求严格更新的语义版本。普通 `installBundle` 拒绝替换已有包，并提示调用更新操作。 Git 与压缩包安装会先在隔离目录禁用脚本并核验包身份；Git 固定到已检查的提交，压缩包保留已检查的原始字节。远程压缩包使用 Node HTTP fetch，不继承 pnpm 专用认证或代理配置；需要这些配置时，请先下载为本地压缩包再安装。
+
+更新先将依赖图复制到独立候选目录，仅在那里运行 pnpm；组合包选择、用户 patch 和运行中的依赖树保持原样。准备过程验证包身份、版本和无关直接包的文件内容，再发布绑定原文件与候选文件哈希的唯一待更新描述。`listBundles` 将待应用版本与已安装版本分开返回。本次脚本批准只写候选；取消会停止自己的进程树，未确认停止时不能报告成功。已允许的脚本仍可能影响候选之外的路径，批准不等于文件系统沙箱。
+
+`discardBundleUpdate(name, expectedId)` 在 profile 锁内放弃一次已准备更新，核对精确描述 id，并拒绝 Desktop 已记录的切换。它归档待更新元数据，不改变已安装文件。准备后再改配置导致基线失效时可使用此操作；不得手改哈希强行应用。描述损坏或中断切换恢复不确定时，须正常退出、备份并检查保留的 journal，再安排人工恢复。
+
+`pending-update` 入口提供不依赖 Cordis 运行时的严格磁盘协议。Desktop 只在 Host 启动前、已有正常退出记录且准备更新的 Host 已退出时消费它。消费器核对文件哈希，保留替换路径的回滚副本并逐步记录移动；启动前先恢复未完成切换，恢复不确定就阻止启动。缺少正常退出证明或原文件变化时，保留待更新状态，不替换运行文件。只替换 manifest、lockfile、workspace 文件和 node_modules；会话、学习数据、patch 和凭据不在替换范围。
 
 <a id="version-compatibility-and-exemptions"></a>
 ### 版本兼容性与豁免
@@ -73,6 +81,7 @@ CLI 提供 `dsh plugin --profile <profile> version-exemptions`、`allow-version 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `pnpmCommand` | `pnpm` | pnpm 可执行文件名或路径，与 `dsh plugin` 命令一样通过 `PATH` 解析。 |
+| `prepareTimeoutMs` | `120000` | 独立更新候选准备与验证的总时限，单位毫秒。 |
 | `inspectTimeoutMs` | `20000` | 单次检查所做注册表查询的上限，单位毫秒。 |
 | `githubConnectionTimeoutMs` | `5000` | 安装前 GitHub 仓库连接检查的时限，单位毫秒。 |
 | `registry` | pnpm 自身配置 | 查询与安装首先询问的注册表，http(s) URL；缺省为 pnpm 自身配置指定的那个。 |

@@ -58,6 +58,14 @@ const CODE_KEYS = {
   'stale-approval': 'reasonStaleApproval',
   'incompatible-version': 'reasonIncompatibleVersionUnnamed',
   'operation-error': 'reasonOperationError',
+  'not-updatable': 'reasonNotUpdatable',
+  'not-newer': 'reasonNotNewer',
+  'stale-update': 'reasonStaleUpdate',
+  'target-mismatch': 'reasonTargetMismatch',
+  'tasks-active': 'reasonTasksActive',
+  'restore-failed': 'reasonRestoreFailed',
+  'update-required': 'reasonUpdateRequired',
+  'pending-update': 'reasonPendingUpdate',
 } satisfies Record<ManagementError['code'], PluginManagerLocaleKey>
 
 /** The sentence a failed action opens with, by what was being done. */
@@ -65,6 +73,7 @@ const FAILED_KEYS = {
   enable: 'failedEnable',
   disable: 'failedDisable',
   uninstall: 'failedUninstall',
+  discardUpdate: 'failedDiscardUpdate',
   rowEnable: 'failedRowEnable',
   rowDisable: 'failedRowDisable',
 } satisfies Record<FailedAction, PluginManagerLocaleKey>
@@ -92,6 +101,9 @@ export function managementText(error: {
         peers: Object.entries(plugin.peers).map(([name, range]) => `${name} ${range}`).join(', '),
       }))
     return [...sentences, t(error.installing ? 'reasonIncompatibleInstall' : 'reasonIncompatibleInstalled')].join(t('sentenceSeparator'))
+  }
+  if (error.code === 'restore-failed') {
+    return [t('reasonRestoreFailed'), error.diagnostic].filter(Boolean).join(t('sentenceSeparator'))
   }
   if (error.code !== 'operation-error') return t(CODE_KEYS[error.code])
   return error.diagnostic === undefined || error.diagnostic === '' ? t('reasonOperationError') : error.diagnostic
@@ -148,12 +160,14 @@ export function noticeText(notice: ManagerNotice, t: Translate): string {
   switch (notice.kind) {
     case 'restart': return t('restartNotice')
     case 'overridden': return t('overriddenNotice', { name: notice.packageName })
-    case 'cancelled': return t('installCancelled')
+    case 'cancelled': return t(notice.update ? 'updateCancelled' : 'installCancelled')
     case 'refresh-failed': return t('refreshError')
-    case 'install': return t(({
-      done: 'installBackgroundDone', failed: 'installBackgroundFailed',
-      unconfirmed: 'installBackgroundUnconfirmed', applying: 'installBackgroundApplying', unknown: 'installBackgroundUnknown',
-    } as const)[notice.outcome])
+    case 'install': return notice.update && (notice.outcome === 'done' || notice.outcome === 'failed' || notice.outcome === 'applying')
+      ? t(notice.outcome === 'done' ? 'updateRestart' : notice.outcome === 'failed' ? 'updateFailedTitle' : 'updatingTitle')
+      : t(({
+        done: 'installBackgroundDone', failed: 'installBackgroundFailed',
+        unconfirmed: 'installBackgroundUnconfirmed', applying: 'installBackgroundApplying', unknown: 'installBackgroundUnknown',
+      } as const)[notice.outcome])
     case 'failed': {
       const reason = notice.code === undefined ? notice.reason : managementText({
         code: notice.code, diagnostic: notice.reason, ...notice.incompatible === undefined ? {} : { incompatible: notice.incompatible },

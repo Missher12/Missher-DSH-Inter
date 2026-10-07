@@ -1730,7 +1730,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Current runtime entries with persistent patch targets.',
       },
       {
-        signature: '@Remote listBundles(): Promise<BundleInfo[]>',
+        signature: '@Remote async listBundles(): Promise<BundleInfo[]>',
         description: 'Read the profile\'s installed bundles, the bundles this dsh installation supplies, and the selected names that are not bundles. A dependency without a bundle patch is listed, as a `not-bundle` problem, only while it is selected.',
         parameters: [],
         returns: 'Package versions, manifest descriptions, rows, optional display metadata, activation selections, whether the installation offers the bundle, and removal availability.',
@@ -1748,6 +1748,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'The package the spec names, or why it is refused.',
       },
       {
+        signature: '@Remote async checkBundleUpdate(name: string): Promise<BundleUpdateCheck>',
+        description: 'Check the selected bundle at its profile registry without installing or changing configuration.',
+        parameters: [{ name: 'name', description: 'Profile-owned bundle package name.' }],
+        returns: 'An exact newer registry spec, the current version, a manual source, or a refusal.',
+      },
+      {
+        signature: '@Remote async inspectBundleUpdate(name: string, spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection>',
+        description: 'Inspect a replacement for one installed bundle; unresolved Git/tarball identity is checked after fetching.',
+        parameters: [{ name: 'name', description: 'Exact installed target, never inferred from the replacement spec.' }, { name: 'spec', description: 'Replacement package spec.' }, { name: 'options', description: 'Registry selected by the caller; absence uses the profile registry.' }, { name: 'signal', description: 'Ends a registry lookup early.' }],
+        returns: 'Accepted metadata or a different-package, non-update, or ordinary inspection refusal.',
+      },
+      {
+        signature: '@Remote updateBundle(name: string, spec: string, options: UpdateBundleOptions): Promise<ChangeResult>',
+        description: 'Prepare an isolated update for a profile-owned bundle, preserving its running version, selection and configuration.',
+        parameters: [{ name: 'name', description: 'Exact installed bundle package name.' }, { name: 'spec', description: 'Replacement package spec, pinned for automatic registry updates.' }, { name: 'options', description: 'Expected installed version, request identity, script approvals and registry.' }],
+        returns: 'Candidate diagnostics and stagedVersion after atomic pending publication; Desktop activates it only after a clean Host exit.',
+      },
+      {
+        signature: '@Remote discardBundleUpdate(name: string, expectedId: string): Promise<ChangeResult>',
+        description: 'Archive one still-pending update without changing the running dependency graph.',
+        parameters: [{ name: 'name', description: 'Exact target package shown by listBundles.' }, { name: 'expectedId', description: 'Pending descriptor id shown by listBundles.' }],
+        returns: 'Applied after the descriptor is archived; stale ids or an activation already started are refused.',
+      },
+      {
         signature: '@Remote setPluginEnabled(id: PluginEntryId, enabled: boolean): Promise<ChangeResult>',
         description: 'Persist a plugin entry\'s desired enablement and apply it on live profiles.',
         parameters: [{ name: 'id', description: 'Loader entry identity returned by listPlugins.' }, { name: 'enabled', description: 'Whether the plugin should run.' }],
@@ -1761,7 +1785,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote installBundle(spec: string, options?: InstallBundleOptions): Promise<ChangeResult>',
-        description: 'Install a package using the same pnpm implementation as dsh plugin. GitHub repositories get a connection check bounded by githubConnectionTimeoutMs before pnpm starts; only network failures or timeouts stop installation, while pnpm owns authentication and transport fallback. A run that fails, is cancelled, or adds a package without a bundle patch restores `package.json` and `pnpm-lock.yaml` as they were; downloaded files can stay.',
+        description: 'Install a package using the same pnpm implementation as dsh plugin. GitHub repositories get a connection check bounded by githubConnectionTimeoutMs before pnpm starts; only network failures or timeouts stop that check. Git uses pnpm authentication; remote tarballs are captured once with HTTP fetch, so URLs requiring pnpm-specific authentication must be supplied as a local tarball. A run that fails, is cancelled, or adds a package without a bundle patch restores `package.json` and `pnpm-lock.yaml`; installing a newer existing bundle uses the separate staged update path.',
         parameters: [{ name: 'spec', description: 'One package spec, including local paths relative to the invocation directory.' }, { name: 'options', description: 'Whether to activate the installed bundle (defaults to true), the request id a cancellation names, the pending build scripts to allow for this profile before pnpm runs, and the registry asked first.' }],
         returns: 'Package-manager diagnostics, the registries asked, and the observed activation outcome.',
       },
@@ -1773,9 +1797,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation>',
-        description: 'Stop an installation this manager owns and wait until its files are back.',
+        description: 'Stop an installation or update preparation this manager owns and await its cleanup.',
         parameters: [{ name: 'requestId', description: 'The id the installation was started with.' }],
-        returns: '`cancelled` once the Git check or pnpm exited and the files are restored, `too-late` once the bundle is being applied, `not-running` for any other id.',
+        returns: '`cancelled` after process exit and cleanup, `too-late` during activation or pending publication, `not-running` for any other id, or `failed` when the operation could not clean up safely.',
       },
       {
         signature: '@Remote removeBundle(name: string): Promise<ChangeResult>',
@@ -4878,15 +4902,19 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'BundleInfo',
-    declaration: 'export interface BundleInfo {\n    name: string;\n    version?: string;\n    meta?: PluginLocalizedMeta;\n    description?: string;\n    enabled: boolean;\n    installed: boolean;\n    optional: boolean;\n    removable: boolean;\n    readOnlyReason?: ReadOnlyReason;\n    error?: ManagementError;\n    rows: BundleRowInfo[];\n    overrides: string[];\n}',
+    declaration: 'export interface BundleInfo {\n    name: string;\n    version?: string;\n    pendingUpdate?: {\n        id: string;\n        version: string;\n    };\n    meta?: PluginLocalizedMeta;\n    description?: string;\n    enabled: boolean;\n    installed: boolean;\n    optional: boolean;\n    removable: boolean;\n    readOnlyReason?: ReadOnlyReason;\n    error?: ManagementError;\n    rows: BundleRowInfo[];\n    overrides: string[];\n}',
   },
   {
     name: 'BundleRowInfo',
     declaration: 'export interface BundleRowInfo {\n    rowId: string;\n    moduleName: string;\n    meta?: PluginLocalizedMeta;\n    entryId?: PluginEntryId;\n}',
   },
   {
+    name: 'BundleUpdateCheck',
+    declaration: 'export type BundleUpdateCheck = {\n    status: \'available\';\n    currentVersion: string;\n    version: string;\n    spec: string;\n    registry: Registry;\n} | {\n    status: \'current\';\n    currentVersion: string;\n} | {\n    status: \'manual\';\n    currentVersion: string;\n    source: InstallSpecKind;\n} | {\n    status: \'refused\';\n    error: ManagementError;\n};',
+  },
+  {
     name: 'ChangeResult',
-    declaration: 'export interface ChangeResult {\n    changed: boolean;\n    application: \'applied\' | \'restart-required\' | \'overridden\' | \'failed\' | \'cancelled\';\n    stage: \'install\' | \'enable\' | \'remove\';\n    target: string;\n    enabled?: boolean;\n    error?: ManagementError;\n    warnings?: string[];\n    packageResult?: PackageResult;\n    bundle?: string;\n    pendingBuilds?: string[];\n    approvedBuilds?: string[];\n    registries?: Registry[];\n    failedAt?: \'registry\' | \'spec-host\';\n}',
+    declaration: 'export interface ChangeResult {\n    changed: boolean;\n    application: \'applied\' | \'restart-required\' | \'overridden\' | \'failed\' | \'cancelled\';\n    stage: \'install\' | \'enable\' | \'remove\';\n    target: string;\n    enabled?: boolean;\n    error?: ManagementError;\n    warnings?: string[];\n    packageResult?: PackageResult;\n    bundle?: string;\n    stagedVersion?: string;\n    pendingBuilds?: string[];\n    approvedBuilds?: string[];\n    registries?: Registry[];\n    failedAt?: \'registry\' | \'spec-host\';\n}',
   },
   {
     name: 'ClientArtifactBaseline',
@@ -5890,7 +5918,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ManagementError',
-    declaration: 'export interface ManagementError {\n    code: ReadOnlyReason | \'unknown-plugin\' | \'invalid-spec\' | \'ambiguous-install\' | \'not-bundle\' | \'not-removable\' | \'stop-profile\' | \'bundle-in-use\' | \'stale-approval\' | \'incompatible-version\' | \'operation-error\';\n    diagnostic?: string;\n    incompatible?: IncompatiblePlugin[];\n}',
+    declaration: 'export interface ManagementError {\n    code: ReadOnlyReason | \'unknown-plugin\' | \'invalid-spec\' | \'ambiguous-install\' | \'not-bundle\' | \'not-removable\' | \'stop-profile\' | \'bundle-in-use\' | \'stale-approval\' | \'incompatible-version\' | \'operation-error\' | \'not-updatable\' | \'not-newer\' | \'stale-update\' | \'target-mismatch\' | \'tasks-active\' | \'restore-failed\' | \'update-required\' | \'pending-update\';\n    diagnostic?: string;\n    incompatible?: IncompatiblePlugin[];\n}',
   },
   {
     name: 'ManualCompactAgentContext',
@@ -6146,11 +6174,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PluginInspectProblem',
-    declaration: 'export type PluginInspectProblem = \'invalid-spec\' | \'already-installed\' | \'not-found\' | \'not-a-package\' | \'not-a-bundle\' | \'network\' | \'unknown\';',
+    declaration: 'export type PluginInspectProblem = \'invalid-spec\' | \'already-installed\' | \'not-found\' | \'not-a-package\' | \'not-a-bundle\' | \'not-updatable\' | \'not-newer\' | \'target-mismatch\' | \'network\' | \'unknown\';',
   },
   {
     name: 'PluginInstallCancellation',
-    declaration: 'export interface PluginInstallCancellation {\n    readonly status: \'cancelled\' | \'too-late\' | \'not-running\';\n}',
+    declaration: 'export type PluginInstallCancellation = {\n    readonly status: \'cancelled\' | \'too-late\' | \'not-running\';\n} | {\n    readonly status: \'failed\';\n    readonly error: ManagementError;\n};',
   },
   {
     name: 'PluginInstallFailureKind',
@@ -8063,6 +8091,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TypertTypeModel',
     declaration: 'export interface TypertTypeModel {\n    readonly name: string;\n    readonly declaration: string;\n}',
+  },
+  {
+    name: 'UpdateBundleOptions',
+    declaration: 'export interface UpdateBundleOptions extends Omit<InstallBundleOptions, \'enabled\'> {\n    expectedVersion: string;\n}',
   },
   {
     name: 'UpdateTeamTaskRequest',

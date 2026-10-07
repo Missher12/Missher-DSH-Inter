@@ -20,6 +20,7 @@ export interface IncompatiblePlugin {
 /** Localizable management failure and optional external diagnostic. */
 export interface ManagementError {
   code: ReadOnlyReason | 'unknown-plugin' | 'invalid-spec' | 'ambiguous-install' | 'not-bundle' | 'not-removable' | 'stop-profile' | 'bundle-in-use' | 'stale-approval' | 'incompatible-version' | 'operation-error'
+    | 'not-updatable' | 'not-newer' | 'stale-update' | 'target-mismatch' | 'tasks-active' | 'restore-failed' | 'update-required' | 'pending-update'
   diagnostic?: string
   /** Present with `incompatible-version`: the packages the running DSH version rejects. */
   incompatible?: IncompatiblePlugin[]
@@ -47,6 +48,8 @@ export interface BundleRowInfo {
 export interface BundleInfo {
   name: string
   version?: string
+  /** Validated candidate prepared for activation after the old Host exits normally. */
+  pendingUpdate?: { id: string; version: string }
   /** Local display text with available translations or literal fallbacks, or a metadata diagnostic. */
   meta?: PluginLocalizedMeta
   /** Untranslated `description` of this bundle's package manifest. */
@@ -122,6 +125,8 @@ export interface ChangeResult {
   packageResult?: PackageResult
   /** The bundle an installation added, once pnpm and the bundle check accepted it. */
   bundle?: string
+  /** Version prepared outside the active profile; the running/installed version has not changed yet. */
+  stagedVersion?: string
   /** Exact package names awaiting explicit script approval in the profile's pnpm settings, read after a failed run. */
   pendingBuilds?: string[]
   /** Package script permissions saved before this installation attempt. */
@@ -148,6 +153,19 @@ export interface InstallBundleOptions {
   registry?: Registry
 }
 
+/** Update one existing bundle without changing its saved enablement. */
+export interface UpdateBundleOptions extends Omit<InstallBundleOptions, 'enabled'> {
+  /** Installed version observed when the update was offered; checked again under the profile write lock. */
+  expectedVersion: string
+}
+
+/** Read-only update lookup; non-registry sources require an explicit replacement spec. */
+export type BundleUpdateCheck =
+  | { status: 'available'; currentVersion: string; version: string; spec: string; registry: Registry }
+  | { status: 'current'; currentVersion: string }
+  | { status: 'manual'; currentVersion: string; source: InstallSpecKind }
+  | { status: 'refused'; error: ManagementError }
+
 /** Where an inspection asks. */
 export interface InspectOptions {
   /** The registry asked first; absent, the configured one. */
@@ -164,6 +182,9 @@ export type PluginInspectProblem =
   | 'not-found'
   | 'not-a-package'
   | 'not-a-bundle'
+  | 'not-updatable'
+  | 'not-newer'
+  | 'target-mismatch'
   | 'network'
   | 'unknown'
 
@@ -205,9 +226,9 @@ export interface PluginInstallProgress {
 }
 
 /** Cancellation is confirmed only after process exit and file restoration. */
-export interface PluginInstallCancellation {
-  readonly status: 'cancelled' | 'too-late' | 'not-running'
-}
+export type PluginInstallCancellation =
+  | { readonly status: 'cancelled' | 'too-late' | 'not-running' }
+  | { readonly status: 'failed'; readonly error: ManagementError }
 
 /** One chunk of a pnpm run's output, as the run produces it. */
 export interface PluginInstallLogChunk {

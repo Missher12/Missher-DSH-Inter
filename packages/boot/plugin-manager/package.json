@@ -40,6 +40,10 @@
       "types": "./lib/types/operations.d.ts",
       "default": "./lib/types/operations.js"
     },
+    "./pending-update": {
+      "types": "./lib/types/pending-update.d.ts",
+      "default": "./lib/types/pending-update.js"
+    },
     "./tools": {
       "types": "./lib/types/tools.d.ts",
       "default": "./lib/types/tools.js"
@@ -60,6 +64,7 @@
     "@deepseek-ai/dsh-atomic-write": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
     "execa": "^10.0.0",
+    "semver": "^7.8.5",
     "yaml": "^2.9.0",
     "zod": "^4.4.3",
     "@deepseek-ai/dsh-util-values": "workspace:*"
@@ -86,6 +91,7 @@
     }
   },
   "devDependencies": {
+    "@types/semver": "^7.8.0",
     "@deepseek-ai/dsh-package-manifest": "workspace:*",
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/cordis-plugin-loader": "workspace:~",

@@ -40,6 +40,9 @@
     },
     {
       "path": "../../packages/experimental/browser-use-runtime"
+    },
+    {
+      "path": "../../packages/boot/plugin-manager"
     }
   ],
   "exclude": [

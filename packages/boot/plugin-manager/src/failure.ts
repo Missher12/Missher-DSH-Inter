@@ -8,14 +8,18 @@ export class ManagementFailure extends Error {
   readonly code: ManagementError['code']
   /** The packages an `incompatible-version` rejection names. */
   readonly incompatible: IncompatiblePlugin[] | undefined
+  /** Additional filesystem or recovery detail; callers render it separately from the localized code. */
+  readonly diagnostic: string | undefined
   /**
    * @param code Localizable management rejection.
    * @param incompatible Packages the running DSH version rejects, for `incompatible-version`.
+   * @param diagnostic Additional external diagnostic, when a code alone cannot identify the failure.
    */
-  constructor(code: ManagementError['code'], incompatible?: IncompatiblePlugin[]) {
+  constructor(code: ManagementError['code'], incompatible?: IncompatiblePlugin[], diagnostic?: string) {
     super(code)
     this.code = code
     this.incompatible = incompatible
+    this.diagnostic = diagnostic
   }
 }
 

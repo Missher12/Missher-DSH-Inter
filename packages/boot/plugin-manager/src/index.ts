@@ -1,7 +1,7 @@
 /** Current-profile plugin and bundle management over shared dsh plugin operations. */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
@@ -9,6 +9,8 @@ import { Context } from '@deepseek-ai/cordis'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import z from '@deepseek-ai/schemastery'
+import { gt, valid, validRange } from 'semver'
+import { parse } from 'yaml'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { pluginEntryId, readPluginInventory } from '@deepseek-ai/dsh-host-plugin-inventory'
 import {
@@ -19,7 +21,7 @@ import {
 } from '@deepseek-ai/dsh-app-boot'
 import type {} from '@deepseek-ai/dsh-hmr'
 import type { ProfileContext, ProfileManifest } from '@deepseek-ai/dsh-app-boot'
-import { bundleManifest, readProfileRegistry, registryArguments, runProfilePnpm, saveManifest, viewProfilePackage } from './operations.ts'
+import { activeProfilePackageRun, anchorPathSpec, bundleManifest, readProfileRegistry, registryArguments, runProfilePnpm, saveManifest, viewProfilePackage } from './operations.ts'
 import { classifyInstallFailure } from './install-failure.ts'
 import { InvalidInstallSpecError, parseInstallSpec, type ParsedInstallSpec } from './install-spec.ts'
 import { attributeFailure, normalizeRegistry, NPMMIRROR_REGISTRY, registryPlan } from './registry.ts'
@@ -27,10 +29,14 @@ import { writePluginEnabled } from './patch.ts'
 import { incompatiblePlugin, ManagementFailure } from './failure.ts'
 import { approveBuilds, readPendingBuilds } from './build-approval.ts'
 import { checkGithubConnection } from './github-connection.ts'
+import { packageFiles } from './package-files.ts'
+import { PENDING_UPDATE_PATH, readPendingBundleUpdate, readUpdateBaseBindings, readUpdateCandidateBindings, type PendingBundleUpdate } from './pending-update.ts'
+import { copyUpdateCandidate, ensurePreparationDirectory, finalizeUpdateCandidate } from './staged-files.ts'
 import type {
-  BundleInfo, BundleRowInfo, ChangeResult, InspectOptions, InstallBundleOptions, ManagementError, PackageResult, PluginChange,
+  BundleInfo, BundleRowInfo, BundleUpdateCheck, ChangeResult, InspectOptions, InstallBundleOptions,
+  ManagementError, PackageResult, PluginChange,
   PluginEntryId, PluginInfo, PluginInspectProblem, PluginInstallCancellation, PluginInstallProgress, PluginInstallRequestId,
-  PluginRegistries, PluginSpecInspection, Registry,
+  PluginRegistries, PluginSpecInspection, Registry, UpdateBundleOptions, InstallSpecKind,
 } from './types.ts'
 export type * from './types.ts'
 export { classifyInstallFailure, type InstallFailureFacts } from './install-failure.ts'
@@ -50,6 +56,8 @@ export interface Config {
   githubConnectionTimeoutMs?: number
   /** Maximum time one captured package run may print nothing before the manager terminates it, in milliseconds. */
   idleTimeoutMs?: number
+  /** Total time allowed to prepare and validate an isolated update candidate. */
+  prepareTimeoutMs?: number
   /** The registry lookups and installations ask first, as an http(s) URL; absent, the one pnpm's own configuration names. */
   registry?: string
   /**
@@ -92,7 +100,8 @@ function messageOf(error: unknown): string { return error instanceof Error ? err
 /** An expected refusal keeps its code; anything else becomes an operation error carrying its exact diagnostic. */
 function managementError(error: unknown): ManagementError {
   if (!(error instanceof ManagementFailure)) return { code: 'operation-error', diagnostic: messageOf(error) }
-  return { code: error.code, ...error.incompatible === undefined ? {} : { incompatible: error.incompatible } }
+  return { code: error.code, ...error.incompatible === undefined ? {} : { incompatible: error.incompatible },
+    ...error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic } }
 }
 
 /** The caller stopped an installation; its files are restored before this is thrown. */
@@ -101,6 +110,39 @@ class InstallCancelledError extends Error {
     super('Installation cancelled')
     this.name = 'InstallCancelledError'
   }
+}
+
+/** Exact versions only; tags, ranges, prefixes and coercion cannot authorize an update. */
+function exactVersion(version: string | undefined): version is string {
+  return version !== undefined && /^\d/.test(version) && version.trim() === version && valid(version) !== null
+}
+
+/** Classify a saved dependency value without interpreting a local or Git source as a registry tag. */
+function dependencySource(spec: string): InstallSpecKind | undefined {
+  if (/^(?:file|link):|^\.{1,2}[/\\]|^[/\\]/.test(spec)) return /\.(?:tgz|tar\.gz)(?:#.*)?$/i.test(spec) ? 'tarball' : 'path'
+  if (validRange(spec) !== null || /^[a-zA-Z][\w.-]*$/.test(spec)) return 'registry'
+  try { return parseInstallSpec(spec).kind } catch (error) {
+    if (!(error instanceof InvalidInstallSpecError)) throw error
+    return undefined
+  }
+}
+
+/** Direct fields whose names and saved specs an update must preserve. */
+function profileDependencies(manifest: ProfileManifest): Record<string, string> {
+  const extra = manifest as ProfileManifest & { devDependencies?: Record<string, string>; optionalDependencies?: Record<string, string> }
+  return { ...extra.devDependencies, ...manifest.dependencies, ...extra.optionalDependencies }
+}
+
+interface UpdateTarget {
+  name: string
+  currentVersion: string
+  spec: string
+  enabled: boolean
+}
+
+interface InstalledPackage {
+  manifest: string | undefined
+  files: string | undefined
 }
 
 /** One installation the manager owns until its call settles. */
@@ -182,6 +224,7 @@ export class PluginManager extends TypertRemoteService {
     inspectTimeoutMs: z.number().step(1).min(1000).default(20000),
     githubConnectionTimeoutMs: z.number().step(1).min(1000).default(5000),
     idleTimeoutMs: z.number().step(1).min(1000).default(600000),
+    prepareTimeoutMs: z.number().step(1).min(1000).default(120000),
     registry: z.string().pattern(REGISTRY_URL),
     fallbackRegistries: z.array(z.string().pattern(REGISTRY_URL)).default([NPMMIRROR_REGISTRY]),
   })
@@ -195,12 +238,15 @@ export class PluginManager extends TypertRemoteService {
   private readonly inspectTimeoutMs: number
   private readonly githubConnectionTimeoutMs: number
   private readonly idleTimeoutMs: number
+  private readonly prepareTimeoutMs: number
   private readonly pnpmCommand: string
   private readonly configuredRegistries: Omit<PluginRegistries, 'resolved'>
   private readonly ownerContext: Context
   private readonly abort = new AbortController()
   /** Installations by request id, from their call until it settles. */
   private readonly installs = new Map<PluginInstallRequestId, InstallControl>()
+  /** Undecided scripts from failed isolated preparations, bound to exact source and unchanged original graph. */
+  private readonly stagedBuilds = new Map<string, { base: string; names: string[]; id: string; bindings: PendingBundleUpdate['baseBindings'] }>()
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'pluginManager')
@@ -213,6 +259,7 @@ export class PluginManager extends TypertRemoteService {
     this.inspectTimeoutMs = (config as Required<Config>).inspectTimeoutMs
     this.githubConnectionTimeoutMs = (config as Required<Config>).githubConnectionTimeoutMs
     this.idleTimeoutMs = (config as Required<Config>).idleTimeoutMs
+    this.prepareTimeoutMs = (config as Required<Config>).prepareTimeoutMs
     this.pnpmCommand = (config as Required<Config>).pnpmCommand
     this.configuredRegistries = {
       registry: config.registry === undefined ? null : normalizeRegistry(config.registry),
@@ -277,7 +324,8 @@ export class PluginManager extends TypertRemoteService {
    * whether the installation offers the bundle, and removal availability.
    */
   @Remote
-  listBundles(): Promise<BundleInfo[]> {
+  async listBundles(): Promise<BundleInfo[]> {
+    const pending = await readPendingBundleUpdate(this.profile.dir)
     const manifest = readProfileManifest('dsh', this.profile.dir)
     const exemptions = readProfileVersionExemptions(this.profile.dir)
     const selected = manifest.dsh?.profile?.bundles ?? []
@@ -315,7 +363,10 @@ export class PluginManager extends TypertRemoteService {
         }
       }
     }
-    return Promise.resolve(bundles)
+    if (pending !== undefined) for (const bundle of bundles) {
+      if (bundle.name === pending.target) bundle.pendingUpdate = { id: pending.id, version: pending.nextVersion }
+    }
+    return bundles
   }
 
   /** Read the registries this manager asks: the configured first one, its fallbacks in order, and what pnpm's own configuration names.
@@ -339,6 +390,12 @@ export class PluginManager extends TypertRemoteService {
    */
   @Remote
   async inspect(spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection> {
+    return this.inspectSpec(spec, options, signal)
+  }
+
+  private async inspectSpec(
+    spec: string, options?: InspectOptions, signal?: AbortSignal, target?: string, onlyRegistry?: Registry,
+  ): Promise<PluginSpecInspection> {
     let parsed
     try {
       parsed = parseInstallSpec(spec)
@@ -352,7 +409,9 @@ export class PluginManager extends TypertRemoteService {
     const known = new Set([
       ...manifest.dsh?.profile?.bundles ?? [], ...Object.keys(manifest.dependencies ?? {}), ...Object.keys(installation.dependencies ?? {}),
     ])
-    const plan = registryPlan(options?.registry, await this.registries())
+    if (target !== undefined) known.delete(target)
+    if (target !== undefined && parsed.kind === 'registry' && parsed.name !== target) return refused('target-mismatch', 'the replacement must name the selected bundle')
+    const plan = onlyRegistry === undefined ? registryPlan(options?.registry, await this.registries()) : [onlyRegistry]
     const registry = plan[0] as Registry
     switch (parsed.kind) {
       case 'git': return { status: 'accepted', kind: 'git', bundle: null, registry, host: parsed.host }
@@ -369,6 +428,7 @@ export class PluginManager extends TypertRemoteService {
         }
         const inspection = inspectionOf('path', read, registry)
         if (inspection.name === undefined) return refused('not-a-package', 'the package.json names no package')
+        if (target !== undefined && inspection.name !== target) return refused('target-mismatch', 'the replacement must name the selected bundle')
         if (known.has(inspection.name)) return refused('already-installed', `${inspection.name} is already installed`)
         if (!inspection.bundle) return refused('not-a-bundle', `${inspection.name} declares no dsh.bundle`)
         return inspection
@@ -407,6 +467,7 @@ export class PluginManager extends TypertRemoteService {
           if (typeof latest !== 'object' || latest === null) return refusedBy('unknown', 'pnpm view answered no package')
           const inspection = inspectionOf('registry', latest, current)
           const named = inspection.name === undefined ? { ...inspection, name: parsed.name } : inspection
+          if (target !== undefined && named.name !== target) return refused('target-mismatch', 'the registry answered a different package')
           if (!named.bundle) return refusedBy('not-a-bundle', `${named.name} declares no dsh.bundle`)
           return named
         }
@@ -414,6 +475,253 @@ export class PluginManager extends TypertRemoteService {
         throw new Error('no registry was asked')
       }
     }
+  }
+
+  /** Check the selected bundle at its profile registry without installing or changing configuration.
+   * @param name Profile-owned bundle package name.
+   * @returns An exact newer registry spec, the current version, a manual source, or a refusal.
+   */
+  @Remote
+  async checkBundleUpdate(name: string): Promise<BundleUpdateCheck> {
+    try {
+      const target = this.updateTarget(name)
+      const source = dependencySource(target.spec)
+      if (source === undefined) throw new ManagementFailure('not-updatable')
+      if (source !== 'registry') return { status: 'manual', currentVersion: target.currentVersion, source }
+      const registry = await readProfileRegistry(this.profile.dir, {
+        ...this.profile.packageManager ?? { command: this.pnpmCommand }, timeoutMs: this.inspectTimeoutMs, packageName: name,
+      })
+      if (registry === null) throw new Error('The profile registry could not be resolved; no other registry was asked')
+      const inspection = await this.inspectSpec(`${name}@latest`, { registry }, this.abort.signal, name, registry)
+      if (inspection.status === 'refused') return { status: 'refused', error: { code: 'operation-error', diagnostic: inspection.reason } }
+      if (!exactVersion(inspection.version)) throw new ManagementFailure('not-newer')
+      if (!gt(inspection.version, target.currentVersion)) return { status: 'current', currentVersion: target.currentVersion }
+      return { status: 'available', currentVersion: target.currentVersion, version: inspection.version,
+        spec: `${name}@${inspection.version}`, registry: inspection.registry }
+    } catch (error) { return { status: 'refused', error: managementError(error) } }
+  }
+
+  /** Inspect a replacement for one installed bundle; unresolved Git/tarball identity is checked after fetching.
+   * @param name Exact installed target, never inferred from the replacement spec.
+   * @param spec Replacement package spec.
+   * @param options Registry selected by the caller; absence uses the profile registry.
+   * @param signal Ends a registry lookup early.
+   * @returns Accepted metadata or a different-package, non-update, or ordinary inspection refusal.
+   */
+  @Remote
+  async inspectBundleUpdate(name: string, spec: string, options?: InspectOptions, signal?: AbortSignal): Promise<PluginSpecInspection> {
+    let target: UpdateTarget
+    try { target = this.updateTarget(name) }
+    catch (error) { return refused('not-updatable', messageOf(error)) }
+    const registry = options?.registry === undefined ? null : options.registry
+    const inspection = await this.inspectSpec(spec, options, signal, name, registry)
+    if (inspection.status === 'refused') return inspection
+    if (inspection.name !== undefined && inspection.name !== name) return refused('target-mismatch', 'the replacement must name the selected bundle')
+    if (inspection.kind === 'registry' || inspection.kind === 'path') {
+      if (!exactVersion(inspection.version) || !gt(inspection.version, target.currentVersion)) {
+        return refused('not-newer', 'the replacement must have a strictly newer semantic version')
+      }
+    }
+    return inspection
+  }
+
+  /** Prepare an isolated update for a profile-owned bundle, preserving its running version, selection and configuration.
+   * @param name Exact installed bundle package name.
+   * @param spec Replacement package spec, pinned for automatic registry updates.
+   * @param options Expected installed version, request identity, script approvals and registry.
+   * @returns Candidate diagnostics and stagedVersion after atomic pending publication; Desktop activates it only after a clean Host exit.
+   */
+  @Remote
+  updateBundle(name: string, spec: string, options: UpdateBundleOptions): Promise<ChangeResult> {
+    return this.stageUpdate(name, spec, options)
+  }
+
+  /** Archive one still-pending update without changing the running dependency graph.
+   * @param name Exact target package shown by listBundles.
+   * @param expectedId Pending descriptor id shown by listBundles.
+   * @returns Applied after the descriptor is archived; stale ids or an activation already started are refused.
+   */
+  @Remote
+  discardBundleUpdate(name: string, expectedId: string): Promise<ChangeResult> {
+    return this.change(async (result) => {
+      const profile = await realpath(this.profile.dir)
+      await ensurePreparationDirectory(profile, 'updates')
+      const descriptorPath = join(profile, PENDING_UPDATE_PATH)
+      const assertFile = async (path: string): Promise<boolean> => {
+        try {
+          const stat = await lstat(path)
+          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Pending update metadata must be a regular file')
+          return true
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+      }
+      if (!await assertFile(descriptorPath)) throw new ManagementFailure('stale-update')
+      const pending = await readPendingBundleUpdate(profile)
+      if (pending?.id !== expectedId || pending.target !== name) throw new ManagementFailure('stale-update')
+      if (await assertFile(join(profile, '.plugin-manager/desktop-activation.json'))) throw new Error('Pending update activation already started; complete Desktop recovery before discarding it')
+      const directory = join(profile, '.plugin-manager/updates', pending.id)
+      const stat = await lstat(directory)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Pending update archive must be a real directory')
+      const bytes = await readFile(descriptorPath)
+      const receiptPath = join(profile, '.plugin-manager/desktop-clean-stop.json')
+      let matchingReceipt = false
+      if (await assertFile(receiptPath)) {
+        const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as { id?: string; descriptorHash?: string; producerPid?: number }
+        matchingReceipt = receipt.id === pending.id && receipt.producerPid === pending.producerPid
+          && receipt.descriptorHash === createHash('sha256').update(bytes).digest('hex')
+      }
+      await writeFileAtomic(join(directory, 'discarded-pending.json'), bytes.toString('utf8'), { mode: 0o600 })
+      if (matchingReceipt) await rename(receiptPath, join(directory, 'discarded-clean-stop.json'))
+      await rm(descriptorPath)
+      result.changed = true
+      return 'applied'
+    }, { stage: 'install', target: name }, 'install')
+  }
+
+  private stageUpdate(name: string, spec: string, options: UpdateBundleOptions): Promise<ChangeResult> {
+    const requestId = options.requestId
+    const control: InstallControl = { abort: new AbortController(), phase: 'installing', result: Promise.resolve(null) }
+    if (requestId !== undefined) this.installs.set(requestId, control)
+    const signal = AbortSignal.any([this.abort.signal, control.abort.signal, AbortSignal.timeout(this.prepareTimeoutMs)])
+    const announce = (phase: PluginInstallProgress['phase']): void => {
+      if (requestId !== undefined) this.ownerContext.emit('plugin-manager/install-state', { requestId, phase })
+    }
+    const result = this.change(async (result) => {
+      try {
+        signal.throwIfAborted()
+        const profile = await realpath(this.profile.dir)
+        if (await readPendingBundleUpdate(profile) !== undefined) throw new ManagementFailure('pending-update')
+        const target = this.updateTarget(name)
+        if (target.currentVersion !== options.expectedVersion) throw new ManagementFailure('stale-update')
+        const parsed = parseInstallSpec(anchorPathSpec(spec, this.profile.cwd))
+        const inspection = await this.inspectBundleUpdate(name, parsed.spec, options, signal)
+        if (inspection.status === 'refused') {
+          if (inspection.problem === 'target-mismatch' || inspection.problem === 'not-newer' || inspection.problem === 'not-updatable') throw new ManagementFailure(inspection.problem)
+          throw new Error(inspection.reason)
+        }
+        const installSpec = inspection.kind === 'registry' ? `${name}@${inspection.version as string}` : parsed.spec
+        const original = readProfileManifest('dsh', profile)
+        const baseBindings = await readUpdateBaseBindings(profile, signal)
+        const approvalKey = JSON.stringify([name, installSpec, options.expectedVersion, options.registry ?? null])
+        const previous = options.approvedBuilds === undefined ? undefined : this.stagedBuilds.get(approvalKey)
+        if (options.approvedBuilds !== undefined && (previous === undefined || previous.base !== JSON.stringify(baseBindings))) throw new ManagementFailure('stale-approval')
+        const packages = await this.installedPackages(original, signal)
+        const id = previous?.id ?? randomUUID()
+        const relativePath = `.plugin-manager/updates/${id}/candidate`
+        const directory = join(profile, '.plugin-manager/updates', id)
+        const candidate = join(profile, relativePath)
+        await ensurePreparationDirectory(profile, 'updates')
+        if (previous === undefined) await mkdir(directory, { mode: 0o700 })
+        let published = false
+        let retained = false
+        try {
+          if (previous === undefined) await copyUpdateCandidate(profile, candidate, signal)
+          else if (JSON.stringify(await readUpdateBaseBindings(candidate, signal)) !== JSON.stringify(previous.bindings)) throw new ManagementFailure('stale-approval')
+          if (options.approvedBuilds !== undefined) {
+            await approveBuilds(candidate, options.approvedBuilds)
+            result.approvedBuilds = options.approvedBuilds
+          }
+          const registry = options.registry ?? null
+          result.registries = [registry]
+          announce('installing')
+          const connection = previous === undefined ? checkGithubConnection(parsed, candidate, {
+            timeoutMs: this.githubConnectionTimeoutMs, outputBytes: this.outputBytes, signal,
+            ...this.profile.packageManager?.env === undefined ? {} : { env: this.profile.packageManager.env },
+          }) : Promise.resolve(undefined)
+          this.packageOperations.add(connection)
+          let connectionFailure: PackageResult | undefined
+          try { connectionFailure = await connection } finally { this.packageOperations.delete(connection) }
+          if (connectionFailure?.kind === 'network' || connectionFailure?.kind === 'timeout') {
+            result.packageResult = connectionFailure
+            result.failedAt = 'spec-host'
+            throw new Error(connectionFailure.output)
+          }
+          const args = previous === undefined ? [
+            'add', installSpec, ...registryArguments(registry),
+            '--package-import-method=copy', '--ignore-pnpmfile', '--config.ignore-workspace=true',
+            '--modules-dir=node_modules', '--virtual-store-dir=node_modules/.pnpm', `--lockfile-dir=${candidate}`,
+            '--config.enable-global-virtual-store=false',
+          ] : [
+            'approve-builds', ...registryArguments(registry),
+            '--config.ignore-pnpmfile=true', '--config.ignore-workspace=true', '--config.modules-dir=node_modules',
+            '--config.virtual-store-dir=node_modules/.pnpm', `--config.lockfile-dir=${candidate}`,
+            '--config.enable-global-virtual-store=false', '--', ...options.approvedBuilds ?? [],
+          ]
+          const run = await this.runPnpm(args, signal, requestId, candidate)
+          result.packageResult = run
+          signal.throwIfAborted()
+          if (run.incompatible !== undefined) throw new ManagementFailure('incompatible-version', run.incompatible)
+          if (run.exitCode !== 0 || run.timedOut === true) {
+            result.pendingBuilds = await readPendingBuilds(candidate)
+            const bindings = await readUpdateBaseBindings(candidate, signal)
+            if (result.pendingBuilds.length > 0 && bindings.files['pnpm-lock.yaml'] !== null && bindings.nodeModules !== null) {
+              this.stagedBuilds.set(approvalKey, { base: JSON.stringify(baseBindings), names: result.pendingBuilds, id, bindings })
+              retained = true
+            }
+            throw new Error(run.output)
+          }
+          const prepared = readProfileManifest('dsh', candidate)
+          const installed = readProfileManifest('dsh', join(candidate, 'node_modules', name))
+          if (installed.name !== name || !Object.hasOwn(prepared.dependencies ?? {}, name)) throw new ManagementFailure('target-mismatch')
+          if (inspection.version !== undefined && installed.version !== inspection.version) throw new ManagementFailure('target-mismatch')
+          if (!exactVersion(installed.version) || !gt(installed.version, options.expectedVersion)) throw new ManagementFailure('not-newer')
+          if (installed.dsh?.bundle === undefined) throw new ManagementFailure('not-bundle')
+          const compatibility = evaluatePluginCompatibility(installed, readProfileVersionExemptions(profile))
+          if (compatibility !== undefined && !compatibility.exempted) throw new ManagementFailure('incompatible-version', [incompatiblePlugin(compatibility)])
+          for (const file of bundlePatchPaths(join(candidate, 'node_modules', name), installed.dsh.bundle)) loadOverlayPatches('dsh', file)
+          // Non-target package specs are restored only after pnpm has resolved them at their original locations.
+          await finalizeUpdateCandidate(profile, candidate, name, signal)
+          await this.assertUnchangedDependencies(original, readProfileManifest('dsh', candidate), packages, name, candidate)
+          if (JSON.stringify(baseBindings) !== JSON.stringify(await readUpdateBaseBindings(profile, signal))) throw new ManagementFailure('stale-update')
+          if (this.updateTarget(name).currentVersion !== options.expectedVersion) throw new ManagementFailure('stale-update')
+          const pending: PendingBundleUpdate = { schema: 1, id, producerPid: process.pid, profileRealPath: profile, target: name,
+            beforeVersion: options.expectedVersion, nextVersion: installed.version, baseBindings, candidateRelativePath: relativePath,
+            candidateBindings: await readUpdateCandidateBindings(candidate, signal), createdAt: Date.now() }
+          signal.throwIfAborted()
+          control.phase = 'applying'
+          announce('applying')
+          await writeFileAtomic(join(profile, PENDING_UPDATE_PATH), JSON.stringify(pending, null, 2) + '\n', { mode: 0o600 })
+          published = true
+          this.stagedBuilds.delete(approvalKey)
+          result.changed = true
+          result.bundle = name
+          result.enabled = target.enabled
+          result.stagedVersion = installed.version
+          return 'restart-required'
+        } catch (error) {
+          if (control.abort.signal.aborted || this.abort.signal.aborted) throw new InstallCancelledError()
+          throw error
+        } finally {
+          if (!published && !retained) {
+            this.stagedBuilds.delete(approvalKey)
+            const active = await activeProfilePackageRun(candidate)
+            if (active === undefined) await rm(directory, { recursive: true, force: true })
+            else throw new Error(`Candidate cleanup refused while its package process is active: ${active}`)
+          }
+        }
+      } catch (error) {
+        if ((control.abort.signal.aborted || this.abort.signal.aborted) && error instanceof Error && error.name === 'AbortError') throw new InstallCancelledError()
+        throw error
+      }
+    }, { stage: 'install', target: name }, 'install')
+    control.result = result
+    this.packageOperations.add(result)
+    return result.finally(() => {
+      this.packageOperations.delete(result)
+      if (requestId !== undefined) this.installs.delete(requestId)
+    })
+  }
+
+  private updateTarget(name: string): UpdateTarget {
+    const profile = readProfileManifest('dsh', this.profile.dir)
+    const spec = profile.dependencies?.[name]
+    const installation = JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest
+    if (!Object.hasOwn(profile.dependencies ?? {}, name) || spec === undefined || Object.hasOwn(installation.dependencies ?? {}, name)) throw new ManagementFailure('not-updatable')
+    if (this.protectsManager(name)) throw new ManagementFailure('management-required')
+    const manifest = readProfileManifest('dsh', join(this.profile.dir, 'node_modules', name))
+    if (manifest.name !== name) throw new ManagementFailure('target-mismatch')
+    if (manifest.dsh?.bundle === undefined) throw new ManagementFailure('not-bundle')
+    if (!exactVersion(manifest.version)) throw new ManagementFailure('not-updatable')
+    return { name, spec, currentVersion: manifest.version, enabled: (profile.dsh?.profile?.bundles ?? []).includes(name) }
   }
 
   /** Persist a plugin entry's desired enablement and apply it on live profiles.
@@ -450,9 +758,10 @@ export class PluginManager extends TypertRemoteService {
   /**
    * Install a package using the same pnpm implementation as dsh plugin. GitHub
    * repositories get a connection check bounded by githubConnectionTimeoutMs before pnpm starts;
-   * only network failures or timeouts stop installation, while pnpm owns authentication and transport fallback. A run
+   * only network failures or timeouts stop that check. Git uses pnpm authentication; remote tarballs are captured
+   * once with HTTP fetch, so URLs requiring pnpm-specific authentication must be supplied as a local tarball. A run
    * that fails, is cancelled, or adds a package without a bundle patch restores
-   * `package.json` and `pnpm-lock.yaml` as they were; downloaded files can stay.
+   * `package.json` and `pnpm-lock.yaml`; installing a newer existing bundle uses the separate staged update path.
    * @param spec One package spec, including local paths relative to the invocation directory.
    * @param options Whether to activate the installed bundle (defaults to true), the request id a cancellation names,
    * the pending build scripts to allow for this profile before pnpm runs, and the registry asked first.
@@ -460,6 +769,10 @@ export class PluginManager extends TypertRemoteService {
    */
   @Remote
   installBundle(spec: string, options?: InstallBundleOptions): Promise<ChangeResult> {
+    return this.installTransaction(spec, options)
+  }
+
+  private installTransaction(spec: string, options?: InstallBundleOptions): Promise<ChangeResult> {
     const requestId = options?.requestId
     const control: InstallControl = { abort: new AbortController(), phase: 'installing', result: Promise.resolve(null) }
     const stopped = (): boolean => control.abort.signal.aborted || this.abort.signal.aborted
@@ -470,12 +783,20 @@ export class PluginManager extends TypertRemoteService {
     const result = this.change(async (result) => {
       if (spec.trim() === '' || spec.startsWith('-')) throw new ManagementFailure('invalid-spec')
       if (stopped()) throw new InstallCancelledError()
+      const beforeManifest = readProfileManifest('dsh', this.profile.dir)
+      const before = beforeManifest.dependencies ?? {}
+      const parsed = parseInstallSpec(anchorPathSpec(spec, this.profile.cwd))
+      const known = new Set([...beforeManifest.dsh?.profile?.bundles ?? [], ...Object.keys(profileDependencies(beforeManifest)), ...Object.keys((JSON.parse(readFileSync(this.profile.installAnchor, 'utf8')) as InstallationManifest).dependencies ?? {})])
+      let named = parsed.kind === 'registry' ? parsed.name : undefined
+      if (parsed.kind === 'path' && existsSync(join(parsed.path, 'package.json'))) named = stringField(JSON.parse(await readFile(join(parsed.path, 'package.json'), 'utf8')) as object, 'name')
+      if (named !== undefined && known.has(named)) throw new ManagementFailure('update-required')
+      let installSpec = spec
+      let rebuildApproved = false
       if (options?.approvedBuilds !== undefined) {
-        await approveBuilds(this.profile.dir, options.approvedBuilds)
+        rebuildApproved = await approveBuilds(this.profile.dir, options.approvedBuilds)
         result.approvedBuilds = options.approvedBuilds
       }
       const files = await this.readRestoredFiles()
-      const before = readProfileManifest('dsh', this.profile.dir).dependencies ?? {}
       let name: string
       try {
         result.registries = []
@@ -494,6 +815,23 @@ export class PluginManager extends TypertRemoteService {
           result.failedAt = 'spec-host'
           throw new Error(connectionFailure.output)
         }
+        if (parsed.kind === 'git' || parsed.kind === 'tarball') {
+          const preparationSignal = AbortSignal.any([this.abort.signal, control.abort.signal, AbortSignal.timeout(this.prepareTimeoutMs)])
+          installSpec = await this.prepareOpaqueInstallSpec(parsed, known, preparationSignal,
+            (run) => {
+              result.packageResult = run
+              result.registries = [options?.registry ?? null]
+              const failure = run.kind === undefined ? undefined : attributeFailure(run.kind, run.output, parsed)
+              if (failure !== undefined && failure !== 'other') result.failedAt = failure
+            }, requestId, options?.registry)
+          if (stopped()) throw new InstallCancelledError()
+        }
+        if (rebuildApproved) {
+          const approved = await this.runPnpm(['approve-builds', '--', ...options?.approvedBuilds ?? []], control.abort.signal, requestId)
+          result.packageResult = approved
+          if (stopped()) throw new InstallCancelledError()
+          if (approved.exitCode !== 0 || approved.timedOut === true) throw new Error(approved.output)
+        }
         // The last run is the result's; the registries asked stay listed whatever the outcome.
         const plan = registryPlan(options?.registry, await this.registries())
         let run: PackageResult | undefined
@@ -503,7 +841,7 @@ export class PluginManager extends TypertRemoteService {
           if (stopped()) throw new InstallCancelledError()
           result.registries.push(registry)
           announce('installing', { registry, index: index + 1, total: plan.length })
-          run = await this.runPnpm(['add', spec, ...registryArguments(registry)], control.abort.signal, requestId)
+          run = await this.runPnpm(['add', installSpec, ...registryArguments(registry)], control.abort.signal, requestId)
           result.packageResult = run
           if (stopped()) throw new InstallCancelledError()
           // A compatibility refusal is the package's own answer, so no other registry is asked.
@@ -538,7 +876,8 @@ export class PluginManager extends TypertRemoteService {
         // Registry retries can retain the saved range after a partial installation.
         if (installed.length === 0) installed.push(...Object.keys(after).filter(name => spec === name || spec.startsWith(`${name}@`)))
         const target = installed[0]
-        if (installed.length !== 1 || target === undefined) throw new ManagementFailure('ambiguous-install')
+        if (target === undefined || installed.length !== 1) throw new ManagementFailure('ambiguous-install')
+        if (Object.hasOwn(before, target)) throw new ManagementFailure('update-required')
         name = target
         const dir = resolveBundleDir('dsh', name, this.profile.installAnchor, this.profile.dir)
         const manifest = bundleManifest(name, this.profile.dir, this.profile.installAnchor)
@@ -546,9 +885,10 @@ export class PluginManager extends TypertRemoteService {
         const compatibility = evaluatePluginCompatibility(manifest, readProfileVersionExemptions(this.profile.dir))
         if (compatibility !== undefined && !compatibility.exempted) throw new ManagementFailure('incompatible-version', [incompatiblePlugin(compatibility)])
         for (const file of bundlePatchPaths(dir, manifest.dsh.bundle)) loadOverlayPatches('dsh', file)
+        if (stopped()) throw new InstallCancelledError()
       } catch (error) {
-        // pnpm has exited by now, so the files it rewrote go back as they were.
         await this.restoreFiles(files)
+        if (stopped() && error instanceof Error && error.name === 'AbortError') throw new InstallCancelledError()
         throw error
       }
       control.phase = 'applying'
@@ -563,7 +903,11 @@ export class PluginManager extends TypertRemoteService {
       })
     }, { stage: 'install', target: spec, enabled: options?.enabled !== false }, 'install')
     control.result = result
-    return result.finally(() => { if (requestId !== undefined) this.installs.delete(requestId) })
+    this.packageOperations.add(result)
+    return result.finally(() => {
+      this.packageOperations.delete(result)
+      if (requestId !== undefined) this.installs.delete(requestId)
+    })
   }
 
   /** Recover the result of an active installation without cancelling it.
@@ -576,10 +920,10 @@ export class PluginManager extends TypertRemoteService {
     return this.installs.get(requestId)?.result ?? null
   }
 
-  /** Stop an installation this manager owns and wait until its files are back.
+  /** Stop an installation or update preparation this manager owns and await its cleanup.
    * @param requestId The id the installation was started with.
-   * @returns `cancelled` once the Git check or pnpm exited and the files are restored, `too-late` once the bundle is being
-   * applied, `not-running` for any other id.
+   * @returns `cancelled` after process exit and cleanup, `too-late` during activation or pending publication,
+   * `not-running` for any other id, or `failed` when the operation could not clean up safely.
    */
   @Remote
   async cancelInstall(requestId: PluginInstallRequestId): Promise<PluginInstallCancellation> {
@@ -589,7 +933,8 @@ export class PluginManager extends TypertRemoteService {
     this.ownerContext.emit('plugin-manager/install-state', { requestId, phase: 'cancelling' })
     control.abort.abort()
     /* v8 ignore next -- change() folds every failure into its result; only a lock or disposal error rejects */
-    await control.result.then(() => undefined, () => undefined)
+    const result = await control.result.catch(() => null)
+    if (result?.application === 'failed') return { status: 'failed', error: result.error ?? { code: 'operation-error' } }
     return { status: 'cancelled' }
   }
 
@@ -657,19 +1002,88 @@ export class PluginManager extends TypertRemoteService {
     return { rows, overrides }
   }
 
+  /** Bind a previously unknown install identity before the active profile can be touched. */
+  private async prepareOpaqueInstallSpec(parsed: Extract<ParsedInstallSpec, { kind: 'git' | 'tarball' }>, known: ReadonlySet<string>, signal: AbortSignal, report: (result: PackageResult) => void, requestId?: PluginInstallRequestId, registry?: Registry): Promise<string> {
+    const profile = await realpath(this.profile.dir)
+    const parent = await ensurePreparationDirectory(profile, 'install-sources')
+    const directory = join(parent, randomUUID())
+    const probe = join(directory, 'probe')
+    await mkdir(probe, { recursive: true, mode: 0o700 })
+    let keepArtifact = false
+    try {
+      await writeFileAtomic(join(probe, 'package.json'), '{"name":"dsh-install-identity","private":true}\n', { mode: 0o600 })
+      for (const file of ['.npmrc', 'pnpm-workspace.yaml', 'compatibility.json']) {
+        try { await copyFile(join(profile, file), join(probe, file)) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
+      let fixed = parsed.spec
+      if (parsed.kind === 'tarball') {
+        const artifact = join(directory, 'package.tgz')
+        if (parsed.path !== undefined) await copyFile(parsed.path, artifact)
+        else {
+          // Fetch exactly once: the same original bytes are inspected and later installed, with no repacking.
+          const response = await fetch(parsed.spec, { signal })
+          if (!response.ok || response.body === null) throw new Error(`Could not download the package tarball (HTTP ${String(response.status)}); use a local tarball if this URL requires pnpm-specific authentication`)
+          const file = await open(artifact, 'wx', 0o600)
+          const reader = response.body.getReader()
+          try {
+            while (true) {
+              signal.throwIfAborted()
+              const chunk = await reader.read()
+              if (chunk.done) break
+              await file.writeFile(chunk.value)
+            }
+          } finally { reader.releaseLock(); await file.close() }
+        }
+        fixed = artifact
+      }
+      const inspected = await this.runPnpm(['add', fixed, ...registryArguments(registry ?? null), '--ignore-scripts', '--ignore-pnpmfile', '--package-import-method=copy',
+        '--config.ignore-workspace=true', '--modules-dir=node_modules', '--virtual-store-dir=node_modules/.pnpm', `--lockfile-dir=${probe}`,
+        '--config.enable-global-virtual-store=false'], signal, requestId, probe)
+      report(inspected)
+      signal.throwIfAborted()
+      if (inspected.exitCode !== 0 || inspected.timedOut === true) throw new Error(inspected.output)
+      const names = Object.keys(readProfileManifest('dsh', probe).dependencies ?? {})
+      const name = names[0]
+      if (names.length !== 1 || name === undefined) throw new ManagementFailure('ambiguous-install')
+      if (known.has(name)) throw new ManagementFailure('update-required')
+      const metadata = readProfileManifest('dsh', join(probe, 'node_modules', name))
+      if (metadata.name !== name) throw new ManagementFailure('target-mismatch')
+      if (metadata.dsh?.bundle === undefined) throw new ManagementFailure('not-bundle')
+      if (parsed.kind === 'git') {
+        const lock = parse(await readFile(join(probe, 'pnpm-lock.yaml'), { encoding: 'utf8', signal })) as {
+          importers?: Record<string, { dependencies?: Record<string, { version?: string }> }>
+          packages?: Record<string, { resolution?: { commit?: string; tarball?: string } }>
+        }
+        const version = lock.importers?.['.']?.dependencies?.[name]?.version
+        const resolution = version === undefined ? undefined : (lock.packages?.[version] ?? lock.packages?.[`${name}@${version}`])?.resolution
+        const commit = resolution?.commit ?? /(?:#|\/)([a-f0-9]{40})(?:$|\()/i.exec(resolution?.tarball ?? version ?? '')?.[1]
+        if (commit === undefined || !/^[a-f0-9]{40}$/i.test(commit)) throw new Error('The Git package could not be pinned to the exact inspected commit')
+        fixed = parsed.spec.replace(/#.*$/, '') + '#' + commit
+      } else keepArtifact = true
+      return fixed
+    } finally {
+      const active = await activeProfilePackageRun(probe)
+      if (active !== undefined) throw new Error(`Install identity probe cleanup refused while its process is active: ${active}`)
+      await rm(keepArtifact ? probe : directory, { recursive: true, force: true })
+    }
+  }
+
   /** Run one pnpm command in the profile, streaming its output as install-log chunks. */
   private async runPnpm(
-    args: readonly string[], signal?: AbortSignal, requestId?: PluginInstallRequestId,
+    args: readonly string[], signal?: AbortSignal, requestId?: PluginInstallRequestId, directory = this.profile.dir,
   ): Promise<PackageResult> {
     const jobId = randomUUID()
     const argv = ['pnpm', ...args]
-    const cwd = this.profile.dir
+    const cwd = directory
     const identity = requestId === undefined ? {} : { requestId }
-    const task = runProfilePnpm({ ...this.profile, profile: this.profile.name }, args, {
+    const operationSignal = signal === undefined ? this.abort.signal : AbortSignal.any([this.abort.signal, signal])
+    const task = runProfilePnpm({ ...this.profile, dir: directory, profile: this.profile.name }, args, {
       execution: 'service', ...this.profile.packageManager ?? { command: this.pnpmCommand },
-      signal: signal === undefined ? this.abort.signal : AbortSignal.any([this.abort.signal, signal]),
+      signal: operationSignal,
       outputBytes: this.outputBytes, activateNewBundles: false, idleTimeoutMs: this.idleTimeoutMs,
       lookupTimeoutMs: this.inspectTimeoutMs,
+      restoreCompatibilityFailure: directory === this.profile.dir,
       onOutput: (text, stream) => {
         this.ownerContext.emit('plugin-manager/install-log', { ...identity, jobId, argv, cwd, stream, text })
       },
@@ -709,6 +1123,37 @@ export class PluginManager extends TypertRemoteService {
     for (const [path, content] of files) {
       if (content === undefined) await rm(path, { force: true })
       else await writeFileAtomic(path, content, { mode: 0o600 })
+    }
+  }
+
+  private installedManifest(name: string, directory = this.profile.dir): string | undefined {
+    try { return readFileSync(join(directory, 'node_modules', name, 'package.json'), 'utf8') }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+  }
+
+  private async installedPackages(manifest: ProfileManifest, signal: AbortSignal): Promise<Map<string, InstalledPackage>> {
+    const result = new Map<string, InstalledPackage>()
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(this.prepareTimeoutMs)])
+    for (const name of Object.keys(profileDependencies(manifest))) {
+      result.set(name, { manifest: this.installedManifest(name), files: await packageFiles(join(this.profile.dir, 'node_modules', name), deadline) })
+    }
+    return result
+  }
+
+  private async assertUnchangedDependencies(
+    before: ProfileManifest, after: ProfileManifest, installed: Map<string, InstalledPackage>, target: string, directory = this.profile.dir,
+  ): Promise<void> {
+    const previous = Object.fromEntries(Object.entries(profileDependencies(before)).filter(([name]) => name !== target))
+    const current = Object.fromEntries(Object.entries(profileDependencies(after)).filter(([name]) => name !== target))
+    const names = Object.keys(previous)
+    if (names.length !== Object.keys(current).length || names.some(name => previous[name] !== current[name])) throw new ManagementFailure('target-mismatch')
+    const deadline = AbortSignal.timeout(this.prepareTimeoutMs)
+    for (const [name, contents] of installed) {
+      if (name !== target && (this.installedManifest(name, directory) !== contents.manifest
+        || await packageFiles(join(directory, 'node_modules', name), deadline) !== contents.files)) throw new ManagementFailure('target-mismatch')
     }
   }
 
@@ -784,7 +1229,7 @@ export class PluginManager extends TypertRemoteService {
           result.error = managementError(error)
         }
       }
-      result.changed = before !== this.diskState()
+      result.changed = result.changed || before !== this.diskState()
       this.ownerContext.emit('plugin-manager/changed', { reason })
       return result
     }, { waitMs: this.lockWaitMs })

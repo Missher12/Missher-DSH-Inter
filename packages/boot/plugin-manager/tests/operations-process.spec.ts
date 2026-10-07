@@ -110,14 +110,14 @@ function fixture(child: string, descendant: string) {
  * it everywhere.
  */
 describe.skipIf(process.platform === 'win32')('a run with descendants', () => {
-  it('settles a run whose pipes a descendant keeps open', async () => {
+  it('stops a surviving descendant before completing a service package run', async () => {
     const { context, pidFile, options } = fixture(DRAIN_CHILD, HOLDER_SCRIPT)
     const outcome = await runProfilePnpm(context, ['add', './held'], options)
     const descendant = await readPid(pidFile)
     expect(outcome).toMatchObject({ exitCode: 0 })
-    expect(outcome.output).toContain('dsh: pnpm output was cut short after its process exited')
-    // The descendant still holds the pipes, so the run settled under its drain bound instead of waiting for their end.
-    expect(() => process.kill(descendant, 0)).not.toThrow()
+    expect(outcome.output).toContain('installed')
+    // A prepared graph is publishable only after every owned writer has stopped.
+    expect(() => process.kill(descendant, 0)).toThrow()
   })
 
   it('surfaces an output consumer failure that the bounded drain cuts short', async () => {

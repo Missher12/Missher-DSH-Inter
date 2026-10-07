@@ -52,6 +52,8 @@ export interface PackageOperationOptions {
   idleTimeoutMs?: number
   /** Bound on the pre-install registry lookup, in milliseconds; without one a fixed bound applies. */
   lookupTimeoutMs?: number
+  /** False when a caller owns the complete package/lock/tree rollback under its own write lock. */
+  restoreCompatibilityFailure?: boolean
 }
 
 /** Resolve relative package specs against the caller's directory.
@@ -214,7 +216,7 @@ async function recordRun(dir: string, tree: RunTree): Promise<void> {
  * @param dir Profile directory.
  * @returns The diagnostic, or undefined when no recorded run is active.
  */
-async function activeRecordedRun(dir: string): Promise<string | undefined> {
+export async function activeProfilePackageRun(dir: string): Promise<string | undefined> {
   const path = runRecordPath(dir)
   const text = optionalFile(path)
   if (text === undefined) return undefined
@@ -286,7 +288,7 @@ export async function runProfilePnpm(
 ): Promise<PackageResult> {
   const dir = context.dir ?? resolveProfileDir(context.profile, context.home)
   // Before any profile file is read: a recorded run that is still active may be rewriting them.
-  const active = await activeRecordedRun(dir)
+  const active = await activeProfilePackageRun(dir)
   const logRoot = join(dir, '.plugin-manager', 'logs')
   await mkdir(logRoot, { recursive: true, mode: 0o700 })
   const logDir = await mkdtemp(join(logRoot, 'operation-'))
@@ -413,6 +415,7 @@ export async function runProfilePnpm(
   // for a silence bound to observe: it would fire on a healthy run.
   if (collectors.length > 0) armIdle()
   let exitCode: number
+  let keepRunRecord = false
   try {
     await recordRun(dir, { pid: child.pid, grouped })
     // execa resolves its promise only once the piped stdio has ended, so the
@@ -424,7 +427,19 @@ export async function runProfilePnpm(
     clearTimeout(idleTimer)
     // A stalled run stops its whole tree first, so the caller's rollback and lock
     // release happen only after the scripts it started stopped writing.
-    if (control.stalled) await awaitTreeGone({ pid: child.pid, grouped })
+    if (options.execution === 'service' || control.stalled || options.signal?.aborted === true) {
+      const tree = { pid: child.pid, grouped }
+      if (grouped && child.pid !== undefined && treeAlive(tree)) {
+        // The owner has exited; its scripts cannot keep writing after a candidate is published or removed.
+        try { process.kill(-child.pid, 'SIGKILL') }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+      }
+      await awaitTreeGone(tree)
+      if (treeAlive(tree)) {
+        keepRunRecord = true
+        throw new Error(`Package process tree ${String(child.pid)} did not stop; package preparation cannot finish safely`)
+      }
+    }
     // A descendant that inherited the pipes can hold them open past the process;
     // the tail drains under a bound instead of being awaited forever.
     const drained = await drainWithin(collectors, DRAIN_AFTER_EXIT_MS)
@@ -497,27 +512,35 @@ export async function runProfilePnpm(
         }
       }
       if (warnings.length > 0) {
-        // A bundle component's peers need installed contents, so this rejection lands after pnpm
-        // replaced the tree: restore the files, then reinstall the restored lockfile so the version
-        // that worked before this run keeps loading. A profile that had no lockfile is reinstalled
-        // from its restored manifest without creating one, which removes what this run added.
-        await restore()
-        const hadLockfile = savedFiles.some(file => file.path.endsWith('pnpm-lock.yaml') && file.text !== undefined)
-        const repair = ['install', hadLockfile ? '--frozen-lockfile' : '--config.lockfile=false']
-        const repairing = execa(options.command ?? 'pnpm', [...options.args ?? [], ...repair], {
-          cwd: dir, env: environment, extendEnv: false, reject: false, stdin: 'ignore',
-          ...options.idleTimeoutMs === undefined ? {} : { timeout: options.idleTimeoutMs },
-        })
-        await recordRun(dir, { pid: repairing.pid, grouped: false })
-        const repaired = await repairing
-        exitCode = 1
-        const restoration = repaired.exitCode === 0
-          ? 'restored package.json, pnpm-lock.yaml, and node_modules'
-          : "restored package.json and pnpm-lock.yaml, but node_modules could not be reinstalled; run 'dsh plugin install'"
-        const diagnostic = `\ndsh: installation rejected: ${warnings.join('\n')}\ndsh: ${restoration}.\n`
-        await log.write(diagnostic)
-        options.onOutput?.(diagnostic, 'stderr')
-        append(Buffer.from(diagnostic))
+        if (options.restoreCompatibilityFailure === false) {
+          exitCode = 1
+          const diagnostic = `\ndsh: installation rejected: ${warnings.join('\n')}\n`
+          await log.write(diagnostic)
+          options.onOutput?.(diagnostic, 'stderr')
+          append(Buffer.from(diagnostic))
+        } else {
+          // A bundle component's peers need installed contents, so this rejection lands after pnpm
+          // replaced the tree: restore the files, then reinstall the restored lockfile so the version
+          // that worked before this run keeps loading. A profile that had no lockfile is reinstalled
+          // from its restored manifest without creating one, which removes what this run added.
+          await restore()
+          const hadLockfile = savedFiles.some(file => file.path.endsWith('pnpm-lock.yaml') && file.text !== undefined)
+          const repair = ['install', hadLockfile ? '--frozen-lockfile' : '--config.lockfile=false']
+          const repairing = execa(options.command ?? 'pnpm', [...options.args ?? [], ...repair], {
+            cwd: dir, env: environment, extendEnv: false, reject: false, stdin: 'ignore',
+            ...options.idleTimeoutMs === undefined ? {} : { timeout: options.idleTimeoutMs },
+          })
+          await recordRun(dir, { pid: repairing.pid, grouped: false })
+          const repaired = await repairing
+          exitCode = 1
+          const restoration = repaired.exitCode === 0
+            ? 'restored package.json, pnpm-lock.yaml, and node_modules'
+            : "restored package.json and pnpm-lock.yaml, but node_modules could not be reinstalled; run 'dsh plugin install'"
+          const diagnostic = `\ndsh: installation rejected: ${warnings.join('\n')}\ndsh: ${restoration}.\n`
+          await log.write(diagnostic)
+          options.onOutput?.(diagnostic, 'stderr')
+          append(Buffer.from(diagnostic))
+        }
       } else if (options.activateNewBundles !== false) {
         await reconcile(before, dir, context.installAnchor, options)
       }
@@ -526,7 +549,7 @@ export async function runProfilePnpm(
     control.settled = true
     clearTimeout(idleTimer)
     // This process saw the run end, so no successor has to wait for it.
-    await rm(runRecordPath(dir), { force: true })
+    if (!keepRunRecord) await rm(runRecordPath(dir), { force: true })
     await log.close()
   }
   return {
@@ -592,8 +615,24 @@ export interface PackageViewOptions {
  * @returns The registry URL as pnpm printed it, or null when pnpm did not answer with one.
  */
 export async function readProfileRegistry(
-  dir: string, options: { command?: string; args?: readonly string[]; env?: Readonly<Record<string, string>>; timeoutMs: number },
+  dir: string, options: {
+    command?: string
+    args?: readonly string[]
+    env?: Readonly<Record<string, string>>
+    timeoutMs: number
+    packageName?: string
+  },
 ): Promise<string | null> {
+  const scope = options.packageName?.startsWith('@') === true ? options.packageName.split('/')[0] : undefined
+  if (scope !== undefined) {
+    const scoped = await execa(options.command ?? 'pnpm', [...options.args ?? [], 'config', 'get', `${scope}:registry`], {
+      cwd: dir, env: { ...scrubbedParentEnv(), ...options.env }, extendEnv: false, reject: false, stdin: 'ignore', timeout: options.timeoutMs,
+    })
+    if (scoped.exitCode !== 0) return null
+    const answer = scoped.stdout.trim().replace(/^[\s\S]*\n/, '').trim()
+    if (/^https?:\/\/\S+$/.test(answer)) return answer
+    if (answer !== '' && answer !== 'undefined' && answer !== 'null') return null
+  }
   const result = await execa(options.command ?? 'pnpm', [...options.args ?? [], 'config', 'get', 'registry'], {
     cwd: dir, env: { ...scrubbedParentEnv(), ...options.env }, extendEnv: false, reject: false, stdin: 'ignore', timeout: options.timeoutMs,
   })

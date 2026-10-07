@@ -1,5 +1,6 @@
 /** Persistent manager behavior through a real profile Include and Loader. */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
@@ -24,6 +25,7 @@ import * as operations from '../src/operations.ts'
 import * as githubConnection from '../src/github-connection.ts'
 import { parse, parseDocument } from 'yaml'
 import { isolateGitCommandLineConfig } from './git-environment.ts'
+import { PENDING_UPDATE_PATH, readPendingBundleUpdate, readUpdateBaseBindings } from '../src/pending-update.ts'
 
 // These cases install through real Git and pnpm, so the host's command-line configuration group must not reach their children.
 let restoreGitCommandLineConfig: () => void
@@ -83,6 +85,216 @@ async function fixture(reload: 'live' | 'startup' = 'live', overlay = false, pre
   return { ctx, dir, manager: ctx.pluginManager, bundle, profile, stopHmr, overlays, connection }
 }
 
+/** A replacement source with a readable identity, independent of the currently installed package. */
+function replacementSource(dir: string, version: string, name = 'extra'): string {
+  const source = join(dir, `replacement-${name.replaceAll('/', '-')}-${version}`)
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name, version, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+  writeFileSync(join(source, 'cordis.patch.yml'), '[]\n')
+  return source
+}
+
+/** Replace the package files that a synthetic pnpm add actually changed. */
+function putReplacement(dir: string, source: string): void {
+  const manifest = readProfileManifest('test', dir)
+  const packageJson = readFileSync(join(source, 'package.json'), 'utf8')
+  const { name } = JSON.parse(packageJson) as { name: string }
+  manifest.dependencies = { ...manifest.dependencies, [name]: `file:${source}` }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  mkdirSync(join(dir, 'node_modules', name), { recursive: true })
+  writeFileSync(join(dir, 'node_modules', name, 'package.json'), packageJson)
+  writeFileSync(join(dir, 'node_modules', name, 'plugin.mjs'), 'export const replacement = true\n')
+  const dependencies = Object.fromEntries(Object.entries(manifest.dependencies ?? {})
+    .map(([key, spec]) => [key, { specifier: spec, version: spec }]))
+  writeFileSync(join(dir, 'pnpm-lock.yaml'), JSON.stringify({ lockfileVersion: '9.0', importers: { '.': { dependencies } } }))
+}
+
+it('checks only the profile registry and offers an exact newer version without modifying the profile', async () => {
+  const { manager, dir } = await fixture('startup', false, undefined, { registry: 'https://other.invalid/', fallbackRegistries: [MIRROR] })
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const view = vi.spyOn(operations, 'viewProfilePackage').mockResolvedValue({ exitCode: 0, stderr: '', timedOut: false,
+    stdout: JSON.stringify({ name: 'extra', version: '1.0.1', dsh: { bundle: { patch: './cordis.patch.yml' } } }) })
+  const run = vi.spyOn(operations, 'runProfilePnpm')
+  onTestFinished(() => { view.mockRestore(); run.mockRestore() })
+  expect(await manager.checkBundleUpdate('extra')).toEqual({ status: 'available', currentVersion: '1.0.0', version: '1.0.1', spec: 'extra@1.0.1', registry: OFFICIAL })
+  expect(view).toHaveBeenCalledWith(dir, 'extra@latest', expect.objectContaining({ registry: OFFICIAL }))
+  expect(run).not.toHaveBeenCalled()
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+  view.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'ENOTFOUND', timedOut: false })
+  expect(await manager.checkBundleUpdate('extra')).toMatchObject({ status: 'refused' })
+  expect(view).toHaveBeenCalledTimes(2)
+})
+
+it.each([
+  ['file:../local', 'path'], ['github:acme/extra', 'git'], ['https://example.invalid/extra.tgz', 'tarball'],
+] as const)('keeps %s updates manual without asking a registry', async (spec, source) => {
+  const { manager, dir } = await fixture('startup')
+  const manifest = readProfileManifest('test', dir)
+  manifest.dependencies = { extra: spec }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  const view = vi.spyOn(operations, 'viewProfilePackage')
+  onTestFinished(() => { view.mockRestore() })
+  expect(await manager.checkBundleUpdate('extra')).toEqual({ status: 'manual', currentVersion: '1.0.0', source })
+  expect(view).not.toHaveBeenCalled()
+})
+
+it('accepts only the selected package and strictly newer semantic versions before starting pnpm', async () => {
+  const { manager, dir } = await fixture('startup')
+  const source = replacementSource(dir, '2.0.0')
+  const run = vi.spyOn(operations, 'runProfilePnpm')
+  onTestFinished(() => { run.mockRestore() })
+  expect(await manager.inspectBundleUpdate('extra', source)).toMatchObject({ status: 'accepted', name: 'extra', version: '2.0.0' })
+  expect(await manager.inspectBundleUpdate('extra', replacementSource(dir, '2.0.0', 'other'))).toMatchObject({ status: 'refused', problem: 'target-mismatch' })
+  for (const version of ['1.0.0', '0.9.0', '1.0.0-beta.1', 'banana']) {
+    expect(await manager.inspectBundleUpdate('extra', replacementSource(dir, version))).toMatchObject({ status: 'refused', problem: 'not-newer' })
+  }
+  expect(await manager.updateBundle('extra', source, { expectedVersion: '0.9.0' })).toMatchObject({ application: 'failed', error: { code: 'stale-update' } })
+  expect(await manager.installBundle(source)).toMatchObject({ application: 'failed', error: { code: 'update-required' } })
+  expect(await manager.updateBundle('core', source, { expectedVersion: '1.0.0' })).toMatchObject({ application: 'failed', error: { code: 'not-updatable' } })
+  expect(run).not.toHaveBeenCalled()
+})
+
+it.each([true, false])('prepares enabled=%s updates outside the running profile and persists their pending version', async (enabled) => {
+  const { manager, dir, bundle } = await fixture('startup')
+  const source = replacementSource(dir, '2.0.0')
+  bundle('other', [])
+  const manifest = readProfileManifest('test', dir)
+  manifest.dependencies = { extra: '1.0.0', other: '1.0.0' }
+  if (!enabled) manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles: ['core'] } }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  writeFileSync(join(dir, 'cordis.patch.yml'), '- id: managed\n  config: { preserved: true }\n')
+  const before = await readUpdateBaseBindings(dir, new AbortController().signal)
+  const run = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context) => {
+    expect(context.dir).not.toBe(dir)
+    if (context.dir === undefined) throw new Error('candidate directory missing')
+    putReplacement(context.dir, source)
+    return { exitCode: 0, output: '', truncated: false, logPath: '/candidate.log' }
+  })
+  onTestFinished(() => { run.mockRestore() })
+  expect(await manager.updateBundle('extra', source, { expectedVersion: '1.0.0' }))
+    .toMatchObject({ application: 'restart-required', changed: true, bundle: 'extra', enabled, stagedVersion: '2.0.0' })
+  expect(await readUpdateBaseBindings(dir, new AbortController().signal)).toEqual(before)
+  const pending = await readPendingBundleUpdate(dir)
+  expect(pending).toMatchObject({ schema: 1, producerPid: process.pid, target: 'extra', beforeVersion: '1.0.0', nextVersion: '2.0.0', baseBindings: before })
+  expect(readProfileManifest('test', join(dir, pending!.candidateRelativePath)).dsh?.profile?.bundles).toEqual(manifest.dsh?.profile?.bundles)
+  expect((await manager.listBundles()).find(item => item.name === 'extra')).toMatchObject({ version: '1.0.0', pendingUpdate: { version: '2.0.0' }, enabled })
+  expect(await manager.updateBundle('extra', source, { expectedVersion: '1.0.0' })).toMatchObject({ application: 'failed', error: { code: 'pending-update' } })
+  expect(run).toHaveBeenCalledOnce()
+})
+
+it.each(['failed', 'cancelled', 'same-version', 'wrong-package', 'changed-other'] as const)('leaves the original dependency graph unchanged after %s candidate preparation', async (mode) => {
+  const { manager, dir, bundle } = await fixture('startup')
+  bundle('other', [])
+  const manifest = readProfileManifest('test', dir)
+  manifest.dependencies = { extra: '1.0.0', other: '1.0.0' }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  const source = replacementSource(dir, mode === 'same-version' ? '1.0.0' : '2.0.0', mode === 'wrong-package' ? 'wrong' : 'extra')
+  const before = await readUpdateBaseBindings(dir, new AbortController().signal)
+  const entered = Promise.withResolvers<undefined>()
+  let candidate: string | undefined
+  const run = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context, _args, options) => {
+    candidate = context.dir
+    if (candidate === undefined || candidate === dir) throw new Error('not isolated')
+    putReplacement(candidate, source)
+    if (mode === 'changed-other') writeFileSync(join(candidate, 'node_modules/other/plugin.mjs'), 'changed other package bytes\n')
+    entered.resolve(undefined)
+    if (mode === 'cancelled') await new Promise<void>((resolve) => { options.signal?.addEventListener('abort', () => { resolve() }, { once: true }) })
+    return { exitCode: mode === 'failed' || mode === 'cancelled' ? 1 : 0, output: 'candidate run', truncated: false, logPath: '/candidate.log' }
+  })
+  onTestFinished(() => { run.mockRestore() })
+  const requestId = 'isolated-cancel' as PluginInstallRequestId
+  const updating = manager.updateBundle('extra', 'https://example.invalid/update.tgz', { expectedVersion: '1.0.0', requestId })
+  await entered.promise
+  if (mode === 'cancelled') expect(await manager.cancelInstall(requestId)).toEqual({ status: 'cancelled' })
+  expect((await updating).application).toBe(mode === 'cancelled' ? 'cancelled' : 'failed')
+  expect(await readUpdateBaseBindings(dir, new AbortController().signal)).toEqual(before)
+  expect(existsSync(join(dir, PENDING_UPDATE_PATH))).toBe(false)
+  expect(candidate !== undefined && existsSync(candidate)).toBe(false)
+  expect(run).toHaveBeenCalledOnce()
+})
+
+it.each(['source-changed', 'candidate-changed', 'registry-changed'] as const)('binds script approval to the retained graph on %s and never writes the running policy', async (mode) => {
+  const { manager, dir } = await fixture('startup')
+  const source = replacementSource(dir, '2.0.0')
+  const before = readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')
+  let attempts = 0
+  let retainedCandidate = ''
+  const run = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context, args) => {
+    if (context.dir === undefined || context.dir === dir) throw new Error('not isolated')
+    attempts++
+    if (attempts === 1) {
+      retainedCandidate = context.dir
+      putReplacement(context.dir, source)
+      writeFileSync(join(context.dir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  native: set this to true or false\n')
+      return { exitCode: 1, output: 'ERR_PNPM_IGNORED_BUILDS', truncated: false, logPath: '/candidate.log' }
+    }
+    expect(parse(readFileSync(join(context.dir, 'pnpm-workspace.yaml'), 'utf8'))).toMatchObject({ allowBuilds: { native: true } })
+    expect(context.dir).toBe(retainedCandidate)
+    expect(args[0]).toBe('approve-builds')
+    expect(args).toContain('--config.ignore-pnpmfile=true')
+    expect(args).toContain('--config.modules-dir=node_modules')
+    expect(args).toContain(`--config.lockfile-dir=${retainedCandidate}`)
+    expect(args).not.toContain('--package-import-method=copy')
+    expect(args).not.toContain('--ignore-pnpmfile')
+    expect(args.slice(args.indexOf('--') + 1)).toEqual(['native'])
+    return { exitCode: 0, output: '', truncated: false, logPath: '/candidate.log' }
+  })
+  onTestFinished(() => { run.mockRestore() })
+  expect(await manager.updateBundle('extra', source, { expectedVersion: '1.0.0' })).toMatchObject({ application: 'failed', pendingBuilds: ['native'] })
+  expect(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe(before)
+  writeFileSync(join(source, 'new-source-code.mjs'), 'this changed source must not be fetched on approval')
+  if (mode === 'candidate-changed') writeFileSync(join(retainedCandidate, 'node_modules/extra/plugin.mjs'), 'changed retained graph')
+  const result = await manager.updateBundle('extra', source, { expectedVersion: '1.0.0', approvedBuilds: ['native'], ...(mode === 'registry-changed' ? { registry: MIRROR } : {}) })
+  expect(result).toMatchObject(mode === 'source-changed' ? { application: 'restart-required', stagedVersion: '2.0.0' } : { application: 'failed', error: { code: 'stale-approval' } })
+  expect(attempts).toBe(mode === 'source-changed' ? 2 : 1)
+  expect(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8')).toBe(before)
+})
+
+it('discards only the displayed pending update and matching clean receipt while preserving the graph and changed configuration', async () => {
+  const { manager, dir } = await fixture('startup')
+  const source = replacementSource(dir, '2.0.0')
+  const run = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context) => {
+    putReplacement(context.dir!, source)
+    return { exitCode: 0, output: '', truncated: false, logPath: '/candidate.log' }
+  })
+  onTestFinished(() => { run.mockRestore() })
+  expect((await manager.updateBundle('extra', source, { expectedVersion: '1.0.0' })).application).toBe('restart-required')
+  const pending = (await readPendingBundleUpdate(dir))!
+  const bytes = readFileSync(join(dir, PENDING_UPDATE_PATH))
+  const archive = join(dir, '.plugin-manager/updates', pending.id)
+  const receipt = JSON.stringify({ schema: 1, id: pending.id, descriptorHash: createHash('sha256').update(bytes).digest('hex'), producerPid: process.pid, recordedAt: Date.now() })
+  writeFileSync(join(dir, '.plugin-manager/desktop-clean-stop.json'), receipt)
+  writeFileSync(join(dir, 'cordis.patch.yml'), '[] # user changed configuration after preparation\n')
+  const before = await readUpdateBaseBindings(dir, new AbortController().signal)
+  expect((await manager.listBundles()).find(item => item.name === 'extra')?.pendingUpdate?.id).toBe(pending.id)
+  expect(await manager.discardBundleUpdate('extra', 'stale-id')).toMatchObject({ application: 'failed', error: { code: 'stale-update' } })
+  writeFileSync(join(dir, '.plugin-manager/desktop-activation.json'), '{}')
+  expect(await manager.discardBundleUpdate('extra', pending.id)).toMatchObject({ application: 'failed' })
+  expect(existsSync(join(dir, PENDING_UPDATE_PATH))).toBe(true)
+  rmSync(join(dir, '.plugin-manager/desktop-activation.json'))
+  expect(await manager.discardBundleUpdate('extra', pending.id)).toMatchObject({ application: 'applied', changed: true })
+  expect(await readUpdateBaseBindings(dir, new AbortController().signal)).toEqual(before)
+  expect(readFileSync(join(archive, 'discarded-pending.json'))).toEqual(bytes)
+  expect(readFileSync(join(archive, 'discarded-clean-stop.json'), 'utf8')).toBe(receipt)
+  expect(existsSync(join(dir, pending.candidateRelativePath))).toBe(true)
+  expect(await readPendingBundleUpdate(dir)).toBeUndefined()
+  expect((await manager.listBundles()).find(item => item.name === 'extra')?.pendingUpdate).toBeUndefined()
+})
+
+it('refuses a symlinked manager parent before creating anything in its external destination', async () => {
+  const { manager, dir } = await fixture('startup')
+  const external = join(dir, 'external')
+  mkdirSync(external)
+  symlinkSync(external, join(dir, '.plugin-manager'), 'dir')
+  const run = vi.spyOn(operations, 'runProfilePnpm')
+  onTestFinished(() => { run.mockRestore() })
+  expect(await manager.updateBundle('extra', replacementSource(dir, '2.0.0'), { expectedVersion: '1.0.0' }))
+    .toMatchObject({ application: 'failed' })
+  expect(existsSync(join(external, 'updates'))).toBe(false)
+  expect(existsSync(join(external, 'pending-update.json'))).toBe(false)
+  expect(run).not.toHaveBeenCalled()
+})
+
 it.each(['network', 'timeout'] as const)('stops a GitHub %s before pnpm and attributes it to the repository', async (kind) => {
   const { manager, dir, connection } = await fixture()
   const before = readFileSync(join(dir, 'package.json'), 'utf8')
@@ -136,7 +348,16 @@ it('waits for the GitHub check before installing and activating the bundle', asy
   const entered = Promise.withResolvers<undefined>()
   const release = Promise.withResolvers<undefined>()
   connection.mockImplementation(async () => { entered.resolve(undefined); await release.promise; return undefined })
-  const pnpm = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async () => {
+  const pnpm = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context, args) => {
+    if (context.dir !== dir) {
+      const probe = context.dir!
+      const source = replacementSource(dir, '1.0.0', 'addon')
+      putReplacement(probe, source)
+      writeFileSync(join(probe, 'pnpm-lock.yaml'), JSON.stringify({ importers: { '.': { dependencies: { addon: { version: 'git#' + 'a'.repeat(40) } } } } }))
+      expect(args).toContain('--ignore-scripts')
+      return { exitCode: 0, output: 'inspected', truncated: false, logPath: '/probe.log' }
+    }
+    expect(args[1]).toBe('github:acme/addon#' + 'a'.repeat(40))
     bundle('addon', [])
     const manifest = readProfileManifest('test', dir)
     manifest.dependencies = { ...manifest.dependencies, addon: '1.0.0' }
@@ -534,8 +755,10 @@ it('retains approved policy and reports it as changed when the registry fails be
   expect(parse(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8'))).toEqual({ allowBuilds: { native: true } })
 })
 
-it('runs a real pnpm dependency script only after approval and retry', async () => {
-  const { manager, dir, profile } = await fixture('startup')
+it.each(['path', 'embedded'] as const)('runs a real %s pnpm dependency script only after approval and retry', async (runtime) => {
+  const pnpm = fileURLToPath(new URL('../../../../apps/desktop/node_modules/pnpm/bin/pnpm.mjs', import.meta.url))
+  const embedded = runtime === 'embedded' ? { command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' } } : undefined
+  const { manager, dir, profile } = await fixture('startup', false, undefined, {}, embedded)
   const addon = join(profile.cwd, 'addon')
   mkdirSync(addon)
   writeFileSync(join(addon, 'package.json'), JSON.stringify({ name: 'approval-fixture-addon', version: '1.0.0',
@@ -556,6 +779,42 @@ it('runs a real pnpm dependency script only after approval and retry', async () 
   const allowed = await manager.installBundle('file:./addon', { enabled: false, approvedBuilds: blocked.pendingBuilds! })
   expect(allowed, JSON.stringify(allowed)).toMatchObject({ application: 'restart-required', packageResult: { exitCode: 0 } })
   expect(readFileSync(built, 'utf8')).toBe('built')
+})
+
+
+it.each(['path', 'embedded'] as const)('runs approved scripts on the same real %s pnpm candidate after its source changes', async (runtime) => {
+  const pnpm = fileURLToPath(new URL('../../../../apps/desktop/node_modules/pnpm/bin/pnpm.mjs', import.meta.url))
+  const embedded = runtime === 'embedded' ? { command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' } } : undefined
+  const { manager, dir, profile } = await fixture('startup', false, undefined, {}, embedded)
+  const name = 'staged-approval-addon'
+  const addon = join(profile.cwd, 'staged-addon')
+  mkdirSync(addon)
+  const metadata = { name, version: '2.0.0', scripts: { install: 'node build.cjs' }, dsh: { bundle: { patch: './cordis.patch.yml' } } }
+  writeFileSync(join(addon, 'package.json'), JSON.stringify(metadata))
+  writeFileSync(join(addon, 'build.cjs'), 'require("node:fs").writeFileSync("built.txt", "approved original")\n')
+  writeFileSync(join(addon, 'cordis.patch.yml'), '[]\n')
+  const installed = join(dir, 'node_modules', name)
+  mkdirSync(installed)
+  writeFileSync(join(installed, 'package.json'), JSON.stringify({ ...metadata, version: '1.0.0', scripts: {} }))
+  writeFileSync(join(installed, 'cordis.patch.yml'), '[]\n')
+  const manifest = readProfileManifest('test', dir)
+  manifest.dependencies = { [name]: `file:${addon}` }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  const policy = parseDocument(readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8'))
+  policy.set('offline', true)
+  policy.set('storeDir', join(profile.cwd, 'staged-store'))
+  writeFileSync(join(dir, 'pnpm-workspace.yaml'), String(policy))
+  const before = await readUpdateBaseBindings(dir, new AbortController().signal)
+  const blocked = await manager.updateBundle(name, `file:${addon}`, { expectedVersion: '1.0.0' })
+  expect(blocked, JSON.stringify(blocked)).toMatchObject({ application: 'failed', packageResult: { kind: 'build-blocked' } })
+  expect(blocked.pendingBuilds).toHaveLength(1)
+  writeFileSync(join(addon, 'build.cjs'), 'throw new Error("changed source must not execute")\n')
+  const approved = await manager.updateBundle(name, `file:${addon}`, { expectedVersion: '1.0.0', approvedBuilds: blocked.pendingBuilds! })
+  expect(approved, JSON.stringify(approved)).toMatchObject({ application: 'restart-required', stagedVersion: '2.0.0', packageResult: { exitCode: 0 } })
+  const pending = (await readPendingBundleUpdate(dir))!
+  expect(readFileSync(join(dir, pending.candidateRelativePath, 'node_modules', name, 'built.txt'), 'utf8')).toBe('approved original')
+  expect(existsSync(join(installed, 'built.txt'))).toBe(false)
+  expect(await readUpdateBaseBindings(dir, new AbortController().signal)).toEqual(before)
 })
 
 it.each(['[', 'allowBuilds: false\n'])('preserves pnpm diagnostics when pending approvals cannot be read: %s', async (policy) => {
@@ -750,14 +1009,14 @@ it('restores the manifest when the package pnpm added declares no bundle', async
   expect((await manager.listBundles()).some(row => row.name === 'plain')).toBe(false)
 })
 
-it('never removes an existing dependency after installation validation fails', async () => {
+it('refuses an existing dependency before the install path can overwrite it', async () => {
   const { manager, dir } = await fixture()
   writeFileSync(join(dir, 'node_modules', 'extra', 'package.json'), '{"name":"extra"}')
   const install = vi.spyOn(operations, 'runProfilePnpm').mockResolvedValue({ exitCode: 0, output: '', truncated: false, logPath: '/operation.log' })
   onTestFinished(() => { install.mockRestore() })
   const result = await manager.installBundle('extra')
-  expect(result).toMatchObject({ application: 'failed', stage: 'install', error: { code: 'not-bundle' } })
-  expect(install).toHaveBeenCalledOnce()
+  expect(result).toMatchObject({ application: 'failed', stage: 'install', error: { code: 'update-required' } })
+  expect(install).not.toHaveBeenCalled()
   expect(readProfileManifest('test', dir).dependencies).toEqual({ extra: '1.0.0' })
 })
 
@@ -808,12 +1067,13 @@ it('returns unchanged failures as warnings while toggling and removing another b
   expect(remove).toHaveBeenCalledOnce()
 })
 
-it('reports repeated installs as requiring restart and ambiguous package changes as failures', async () => {
+it('requires the explicit update path for existing registry dependencies and rejects ambiguous new installs', async () => {
   const { manager, dir } = await fixture()
   const install = vi.spyOn(operations, 'runProfilePnpm').mockResolvedValue({ exitCode: 0, output: '', truncated: false, logPath: join(dir, 'pnpm.log') })
   onTestFinished(() => { install.mockRestore() })
-  expect(await manager.installBundle('extra')).toMatchObject({ changed: false, application: 'restart-required' })
-  expect(await manager.installBundle('extra@1')).toMatchObject({ changed: false, application: 'restart-required' })
+  expect(await manager.installBundle('extra')).toMatchObject({ changed: false, application: 'failed', error: { code: 'update-required' } })
+  expect(await manager.installBundle('extra@1')).toMatchObject({ changed: false, application: 'failed', error: { code: 'update-required' } })
+  expect(install).not.toHaveBeenCalled()
   expect(await manager.installBundle('extra-long@1')).toMatchObject({ changed: false, application: 'failed', error: { code: 'ambiguous-install' } })
   install.mockImplementationOnce(async () => {
     writeFileSync(join(dir, 'package.json'), '{}')
@@ -1127,6 +1387,100 @@ it('installs and removes with the bundled pnpm when PATH contains no pnpm', asyn
   expect(removed.packageResult?.exitCode).toBe(0)
   expect(readProfileManifest('test', dir).dependencies ?? {}).not.toHaveProperty('@test/desktop-manager')
 })
+
+it('refuses a staged same-version tarball with changed code while preserving the running profile bytes', async () => {
+  const pnpm = fileURLToPath(new URL('../../../../apps/desktop/node_modules/pnpm/bin/pnpm.mjs', import.meta.url))
+  const { manager, dir } = await fixture('startup', false, undefined, {}, {
+    command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  const source = join(dir, 'source')
+  const original = join(dir, 'original')
+  const replacement = join(dir, 'replacement')
+  for (const path of [source, original, replacement]) mkdirSync(path)
+  const name = '@test/rollback-bytes'
+  const metadata = JSON.stringify({ name, version: '1.0.0', files: ['plugin.mjs', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } } })
+  writeFileSync(join(source, 'package.json'), metadata)
+  writeFileSync(join(source, 'cordis.patch.yml'), '[]\n')
+  writeFileSync(join(source, 'plugin.mjs'), 'export const implementation = "original"\n')
+  const pack = (destination: string) => execa(process.execPath, ['--expose-internals', pnpm, 'pack', '--pack-destination', destination], {
+    cwd: source, env: { ELECTRON_RUN_AS_NODE: '1' }, timeout: 30000,
+  })
+  await pack(original)
+  writeFileSync(join(source, 'plugin.mjs'), 'export const implementation = "replacement"\n')
+  await pack(replacement)
+  const manifest = readProfileManifest('test', dir)
+  delete manifest.dependencies
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  const filename = 'test-rollback-bytes-1.0.0.tgz'
+  const installed = await manager.installBundle(join(original, filename), { enabled: false })
+  expect(installed, JSON.stringify(installed)).toMatchObject({ application: 'restart-required', bundle: name })
+  const before = readFileSync(join(dir, 'package.json'), 'utf8')
+  const lock = readFileSync(join(dir, 'pnpm-lock.yaml'), 'utf8')
+  const installedManifest = readFileSync(join(dir, 'node_modules', name, 'package.json'), 'utf8')
+  const refused = await manager.updateBundle(name, join(replacement, filename), { expectedVersion: '1.0.0' })
+  expect(refused, JSON.stringify(refused)).toMatchObject({ application: 'failed', error: { code: 'not-newer' } })
+  expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(before)
+  expect(readFileSync(join(dir, 'pnpm-lock.yaml'), 'utf8')).toBe(lock)
+  expect(readFileSync(join(dir, 'node_modules', name, 'package.json'), 'utf8')).toBe(installedManifest)
+  expect(readFileSync(join(dir, 'node_modules', name, 'plugin.mjs'), 'utf8')).toBe('export const implementation = "original"\n')
+}, 60000)
+
+it.each([false, true])('prepares a real pnpm update preserving relative non-target specs and refusing changed bytes=%s', async (changedOther) => {
+  const pnpm = fileURLToPath(new URL('../../../../apps/desktop/node_modules/pnpm/bin/pnpm.mjs', import.meta.url))
+  const { manager, dir } = await fixture('startup', false, undefined, { prepareTimeoutMs: 60000 }, {
+    command: process.execPath, args: ['--expose-internals', pnpm], env: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  const destination = join(dir, '..')
+  const pack = async (name: string, version: string, code: string) => {
+    const source = join(dir, `source-${name}-${version}`)
+    mkdirSync(source, { recursive: true })
+    writeFileSync(join(source, 'package.json'), JSON.stringify({ name, version, files: ['plugin.mjs', 'cordis.patch.yml'], dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    writeFileSync(join(source, 'cordis.patch.yml'), '[]\n')
+    writeFileSync(join(source, 'plugin.mjs'), code)
+    await execa(process.execPath, ['--expose-internals', pnpm, 'pack', '--pack-destination', destination], {
+      cwd: source, env: { ELECTRON_RUN_AS_NODE: '1' }, timeout: 30000,
+    })
+    return join(destination, `${name}-${version}.tgz`)
+  }
+  const old = await pack('relative-target', '1.0.0', 'export const value = "old"\n')
+  const next = await pack('relative-target', '2.0.0', 'export const value = "new"\n')
+  await pack('relative-other', '1.0.0', 'export const value = "retained"\n')
+  const manifest = readProfileManifest('test', dir)
+  manifest.dependencies = { 'relative-target': `file:${old}`, 'relative-other': 'file:../relative-other-1.0.0.tgz' }
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+  await execa(process.execPath, ['--expose-internals', pnpm, 'install', '--ignore-scripts', '--offline', '--package-import-method=copy'], {
+    cwd: dir, env: { ELECTRON_RUN_AS_NODE: '1' }, timeout: 30000,
+  })
+  const before = await readUpdateBaseBindings(dir, new AbortController().signal)
+  if (changedOther) {
+    const actual = operations.runProfilePnpm
+    const run = vi.spyOn(operations, 'runProfilePnpm').mockImplementation(async (context, args, options) => {
+      const result = await actual(context, args, options)
+      // A package operation can replace code without changing the package manifest or version.
+      if (context.dir !== undefined && context.dir !== dir) writeFileSync(join(context.dir, 'node_modules/relative-other/plugin.mjs'), 'export const value = "changed same version"\n')
+      return result
+    })
+    onTestFinished(() => { run.mockRestore() })
+  }
+  expect(await manager.checkBundleUpdate('relative-target')).toMatchObject({ status: 'manual', source: 'tarball', currentVersion: '1.0.0' })
+  const result = await manager.updateBundle('relative-target', next, { expectedVersion: '1.0.0' })
+  expect(await readUpdateBaseBindings(dir, new AbortController().signal)).toEqual(before)
+  if (changedOther) {
+    expect(result, JSON.stringify(result)).toMatchObject({ application: 'failed' })
+    expect(await readPendingBundleUpdate(dir)).toBeUndefined()
+    return
+  }
+  expect(result, JSON.stringify(result)).toMatchObject({ application: 'restart-required', stagedVersion: '2.0.0' })
+  const pending = await readPendingBundleUpdate(dir)
+  const candidate = join(dir, pending!.candidateRelativePath)
+  expect(readProfileManifest('test', candidate).dependencies?.['relative-other']).toBe('file:../relative-other-1.0.0.tgz')
+  const lock = parse(readFileSync(join(candidate, 'pnpm-lock.yaml'), 'utf8')) as { importers: Record<string, { dependencies: Record<string, { specifier: string }> }> }
+  expect(lock.importers['.']?.dependencies['relative-other']?.specifier).toBe('file:../relative-other-1.0.0.tgz')
+  expect(readProfileManifest('test', candidate).dependencies?.['relative-target']).toBe(`file:${next}`)
+  expect(readFileSync(join(dir, 'node_modules/relative-target/plugin.mjs'), 'utf8')).toBe('export const value = "old"\n')
+  expect(readFileSync(join(candidate, 'node_modules/relative-target/plugin.mjs'), 'utf8')).toBe('export const value = "new"\n')
+  expect(readFileSync(join(candidate, 'node_modules/relative-other/plugin.mjs'), 'utf8')).toBe('export const value = "retained"\n')
+}, 90000)
 
 const MIRROR = 'https://registry.npmmirror.com/'
 const OFFICIAL = 'https://registry.npmjs.org/'

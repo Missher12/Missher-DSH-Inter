@@ -919,6 +919,24 @@ it('reads the registry pnpm\'s own configuration names in the profile, and answe
   expect(await readProfileRegistry(dir, { timeoutMs: 5 })).toBeNull()
 })
 
+it('uses the profile scope registry and consults its global registry only when no scope value is configured', async () => {
+  const { dir } = fixture()
+  const answer = (stdout: string, exitCode = 0) => command.run.mockResolvedValueOnce({ exitCode, stdout, stderr: '' } as never)
+  answer('https://private.example/\n')
+  expect(await readProfileRegistry(dir, { timeoutMs: 5, packageName: '@scope/bundle' })).toBe('https://private.example/')
+  expect(command.run).toHaveBeenLastCalledWith('pnpm', ['config', 'get', '@scope:registry'], expect.objectContaining({ cwd: dir }))
+  expect(command.run).toHaveBeenCalledTimes(1)
+  answer('undefined\n')
+  answer('https://global.example/\n')
+  expect(await readProfileRegistry(dir, { timeoutMs: 5, packageName: '@scope/bundle' })).toBe('https://global.example/')
+  expect(command.run).toHaveBeenCalledTimes(3)
+  answer('file:/private-registry')
+  expect(await readProfileRegistry(dir, { timeoutMs: 5, packageName: '@scope/bundle' })).toBeNull()
+  answer('', 1)
+  expect(await readProfileRegistry(dir, { timeoutMs: 5, packageName: '@scope/bundle' })).toBeNull()
+  expect(command.run).toHaveBeenCalledTimes(5)
+})
+
 it('asks the registry through pnpm view in the profile directory, without pnpm\'s own retries, and reports how the lookup ended', async () => {
   const { dir } = fixture()
   const answer = (value: object) => command.run.mockResolvedValueOnce(value as never)

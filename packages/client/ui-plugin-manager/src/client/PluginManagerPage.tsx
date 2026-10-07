@@ -28,7 +28,7 @@ import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey 
 import {
   asksMirror, githubRecoveryRegistry, isInstallPending, offeredRegistries, rowKey,
   type InstallInputError, type InstallState, type InstallSubject, type PackageRow, type PackageView,
-  type PluginManagerFace, type RegistryChoice,
+  type BundleUpdateState, type ConfirmState, type PluginManagerFace, type RegistryChoice,
 } from './manager-store.ts'
 import { managementText, noticeText, packageText, registryText, rowText, type Translate } from './presentation.ts'
 import type { PluginPackageRef, PluginRowRef, PluginsSubject } from './slot-contract.ts'
@@ -378,15 +378,66 @@ function DetailTop({ crumbLabel, crumbText, onBack, icon, actions }: {
   )
 }
 
+/** Installed version and explicit update controls shared by cards and detail pages. */
+function PackageVersion({ pkg, t, update, busy, onCheck, onUpdate, onDiscardUpdate }: {
+  readonly pkg: PackageView
+  readonly t: Translate
+  readonly update: BundleUpdateState | undefined
+  readonly busy: boolean
+  readonly onCheck: () => void
+  readonly onUpdate: () => void
+  readonly onDiscardUpdate: () => void
+}): ReactNode {
+  const checking = update?.status === 'checking'
+  const ready = update?.status === 'available' || update?.status === 'manual'
+  const prepared = pkg.pendingUpdate !== undefined || update?.status === 'restart'
+  const stagedVersion = pkg.pendingUpdate?.version ?? (update?.status === 'restart' ? update.stagedVersion : undefined)
+  const message = prepared ? stagedVersion === undefined ? t('updateRestart') : t('updatePreparedVersion', { version: stagedVersion })
+    : update?.status === 'available' ? t('updateAvailable', { version: update.version })
+      : update?.status === 'current' ? t('updateCurrent')
+        : update?.status === 'manual' ? t('updateManual')
+          : update?.status === 'refused' ? managementText(update.error, t)
+            : update?.status === 'failed' ? t('updateCheckFailed', { reason: update.reason }) : null
+  return (
+    <>
+      {pkg.version === undefined ? null : <Tag className={css.versionTag} tone="neutral">{t('versionTag', { version: pkg.version })}</Tag>}
+      {!pkg.installed ? null : (
+        <span className={css.updateControls}>
+          {prepared ? null : <Button variant="outline" size="sm"
+            disabled={busy || checking || pkg.readOnlyReason !== undefined}
+            aria-busy={checking}
+            {...pkg.readOnlyReason === undefined ? {} : { title: managementText({ code: pkg.readOnlyReason }, t) }}
+            aria-label={t(ready ? 'updateLabel' : 'checkUpdateLabel', { name: pkg.name })}
+            onClick={ready ? onUpdate : onCheck}>
+            {t(checking ? 'updateChecking' : ready ? 'updateAction' : 'checkUpdate')}
+          </Button>}
+          {message === null ? null : <span className={css.updateMessage} role="status">{message}</span>}
+          {pkg.pendingUpdate === undefined ? null : <Button variant="outline" size="sm"
+            disabled={busy || pkg.readOnlyReason !== undefined}
+            aria-label={t('discardUpdateLabel', { name: pkg.name })}
+            onClick={onDiscardUpdate}>{t('discardUpdate')}</Button>}
+        </span>
+      )}
+    </>
+  )
+}
+
 /** One package as a card that opens its page: its name, its one-liner, its tags, and its bundle switch. */
-function PackageCard({ pkg, t, resolveText, busy, highlighted, onOpen, onSetEnabled }: {
+function PackageCard({
+  pkg, t, resolveText, busy, updateBusy, update, highlighted, onOpen, onSetEnabled, onCheckUpdate, onUpdate, onDiscardUpdate,
+}: {
   readonly pkg: PackageView
   readonly t: Translate
   readonly resolveText: ResolveText
   readonly busy: boolean
+  readonly updateBusy: boolean
+  readonly update: BundleUpdateState | undefined
   readonly highlighted: boolean
   readonly onOpen: () => void
   readonly onSetEnabled: (enabled: boolean) => void
+  readonly onCheckUpdate: () => void
+  readonly onUpdate: () => void
+  readonly onDiscardUpdate: () => void
 }): ReactNode {
   const { title, description, beta } = packageText(pkg, resolveText)
   const status = packageStatus(pkg)
@@ -404,6 +455,8 @@ function PackageCard({ pkg, t, resolveText, busy, highlighted, onOpen, onSetEnab
         icon={<PackageArtwork key={pkg.meta?.icon} src={pkg.meta?.icon} />}
         tags={(
           <>
+            <PackageVersion pkg={pkg} t={t} update={update} busy={updateBusy}
+              onCheck={onCheckUpdate} onUpdate={onUpdate} onDiscardUpdate={onDiscardUpdate} />
             {beta ? <Tag className={css.statusTag} tone="info">{t('statusBeta')}</Tag> : null}
             {status === 'problem' ? <Tag className={css.statusTag} tone="danger">{t('statusProblem')}</Tag> : null}
           </>
@@ -541,13 +594,15 @@ function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
  * itself; and its rows with their switches and configure controls.
  */
 function PackageDetail({
-  pkg, t, resolveText, busy, rowBusy, configured, configure, renderSlot,
-  onBack, onSetEnabled, onUninstall, onSetRowEnabled,
+  pkg, t, resolveText, busy, updateBusy, update, rowBusy, configured, configure, renderSlot,
+  onBack, onSetEnabled, onUninstall, onSetRowEnabled, onCheckUpdate, onUpdate, onDiscardUpdate,
 }: {
   readonly pkg: PackageView
   readonly t: Translate
   readonly resolveText: ResolveText
   readonly busy: boolean
+  readonly updateBusy: boolean
+  readonly update: BundleUpdateState | undefined
   /** Whether a row has a write in flight. */
   readonly rowBusy: (row: PackageRow) => boolean
   /** Whether the bundle registered a configuration of its own. */
@@ -557,6 +612,9 @@ function PackageDetail({
   readonly onBack: () => void
   readonly onSetEnabled: (enabled: boolean) => void
   readonly onUninstall: () => void
+  readonly onCheckUpdate: () => void
+  readonly onUpdate: () => void
+  readonly onDiscardUpdate: () => void
   readonly onSetRowEnabled: (row: PackageRow, enabled: boolean) => void
 }): ReactNode {
   const { title, description, beta } = packageText(pkg, resolveText)
@@ -594,7 +652,8 @@ function PackageDetail({
       <div className={css.detailMain}>
         <div className={css.titleRow}>
           <h3 className={css.detailTitle}>{title}</h3>
-          {pkg.version === undefined ? null : <Tag className={css.versionTag} tone="neutral">{t('versionTag', { version: pkg.version })}</Tag>}
+          <PackageVersion pkg={pkg} t={t} update={update} busy={updateBusy}
+            onCheck={onCheckUpdate} onUpdate={onUpdate} onDiscardUpdate={onDiscardUpdate} />
           {beta ? <Tag className={css.statusTag} tone="info">{t('statusBeta')}</Tag> : null}
           {status === 'problem' ? <Tag className={css.statusTag} tone="danger">{t('statusProblem')}</Tag> : null}
           {renderSlot('plugins.detail.badge', { subject })}
@@ -651,6 +710,9 @@ function terminalLabels(t: Translate): TerminalBlockLabels {
 
 /** The sentence under the field for a spec the check refused. */
 const INPUT_PROBLEM_KEYS = {
+  'not-updatable': 'reasonNotUpdatable',
+  'not-newer': 'reasonNotNewer',
+  'target-mismatch': 'reasonTargetMismatch',
   'invalid-spec': 'installProblemInvalid',
   'already-installed': 'installProblemInstalled',
   'shipped': 'installProblemShipped',
@@ -732,6 +794,10 @@ function failureText(failure: InstallState['failure'], t: Translate, install?: P
     const incompatible = failure.incompatible === undefined ? {} : { incompatible: failure.incompatible }
     return managementText({ code: failure.code, installing: true, ...incompatible }, t)
   }
+  // Update refusals and incomplete restoration stay visible even when pnpm also classified a failure.
+  if (failure.code === 'not-updatable' || failure.code === 'not-newer' || failure.code === 'stale-update'
+    || failure.code === 'target-mismatch' || failure.code === 'tasks-active' || failure.code === 'restore-failed'
+    || failure.code === 'update-required' || failure.code === 'pending-update') return managementText({ code: failure.code, diagnostic: failure.reason }, t)
   // Blocked scripts the Host could not name leave the person to allow them in the profile's pnpm settings by hand.
   if (failure.kind === 'build-blocked' && !failure.pendingBuilds?.length) return t('installFailureBuildBlockedManual')
   const host = install?.subject?.host
@@ -883,9 +949,13 @@ function InstallDialog({
       <Modal
         open={install.open}
         onClose={onClose}
-        title={t('installTitle')}
+        title={t(install.update === undefined ? 'installTitle' : 'updateTitle')}
         closeLabel={t('close')}
-        {...install.mirrorRecovery ? {} : { description: t('installDescription') }}
+        {...install.update === undefined
+          ? install.mirrorRecovery ? {} : { description: t('installDescription') }
+          : { description: install.update.candidate === undefined
+            ? t('updateManualDescription', { name: install.update.name, version: install.update.currentVersion })
+            : t('updateConfirmDescription', { name: install.update.name, current: install.update.currentVersion, version: install.update.candidate.version }) }}
         className={css.installDialog as string}
         contentClassName={css.installContent as string}
         footer={(
@@ -899,7 +969,7 @@ function InstallDialog({
             </p>
             <Button variant="primary" className={css.wide} disabled={checking || empty} aria-busy={checking} onClick={onRun}>
               {checking ? <StateDot state="ongoing" /> : null}
-              {t(checking ? 'installChecking' : 'installRun')}
+              {t(checking ? 'installChecking' : install.update === undefined ? 'installRun' : 'updateAction')}
             </Button>
           </div>
         )}
@@ -912,6 +982,7 @@ function InstallDialog({
               value={install.spec}
               placeholder={t('installSpecPlaceholder')}
               disabled={checking}
+              readOnly={install.update?.candidate !== undefined}
               aria-label={t(install.mirrorRecovery ? 'installPackageLabel' : 'installSpecLabel')}
               aria-invalid={install.inputError !== null}
               aria-describedby={inputSentence !== null ? errorId : templateHint !== null ? templateHintId : undefined}
@@ -937,6 +1008,7 @@ function InstallDialog({
               className={css.guideToggle}
               aria-expanded={guideOpen}
               aria-controls={guideId}
+              disabled={install.update?.candidate !== undefined}
               onClick={() => { setGuideOpen(open => !open) }}
             >
               <IconChevronDownOutlineRegular className={css.guideChevron} aria-hidden="true" />
@@ -949,7 +1021,7 @@ function InstallDialog({
               aria-expanded={install.registryOpen}
               aria-controls={registryId}
               aria-haspopup="dialog"
-              disabled={checking}
+              disabled={checking || install.update?.candidate !== undefined}
               onClick={onToggleRegistry}
             >
               <span>{t('registryToggle')}</span>
@@ -1074,7 +1146,9 @@ function InstallDialog({
       </Modal>
     )
   }
-  const heading = t(SCREEN_TITLE_KEYS[phase])
+  const heading = install.update !== undefined && (phase === 'done' || phase === 'failed' || phase === 'starting' || phase === 'running' || phase === 'applying')
+    ? t(phase === 'done' ? 'updatedTitle' : phase === 'failed' ? 'updateFailedTitle' : 'updatingTitle')
+    : t(SCREEN_TITLE_KEYS[phase])
   const pending = isInstallPending(phase)
   const cancellable = phase === 'starting' || phase === 'running' || phase === 'unconfirmed'
   const stoppable = cancellable || phase === 'failed' || phase === 'unknown'
@@ -1100,7 +1174,7 @@ function InstallDialog({
     })
     : null
   // Another registry is worth offering only for a failure the Host laid at the one it asked.
-  const changeable = phase === 'failed' && !approvable && install.failure?.failedAt === 'registry'
+  const changeable = phase === 'failed' && !approvable && install.update?.candidate === undefined && install.failure?.failedAt === 'registry'
   return (
     <Modal open={install.open} onClose={onClose} title={heading} headless className={css.installDialog as string}>
       <div className={css.wizard} data-install-phase={phase}>
@@ -1156,7 +1230,7 @@ function InstallDialog({
             ? <p className={css.result} role="status">{t('installDoneNothing')}</p>
             : null}
           {phase === 'done' && install.restartRequired
-            ? <p className={css.resultWarn} role="status">{t('installDoneRestart')}</p>
+            ? <p className={css.resultWarn} role="status">{t(install.update === undefined ? 'installDoneRestart' : 'updateRestart')}</p>
             : null}
           {phase === 'done' && install.approvedBuilds.length > 0
             ? <p className={css.result} role="status">{t('installDoneApproved', { names: install.approvedBuilds.join(', ') })}</p>
@@ -1213,7 +1287,7 @@ function InstallDialog({
             : null}
           {phase !== 'done'
             ? null
-            : install.installed !== null
+            : install.installed !== null && install.update === undefined
               ? <Button variant="primary" className={css.wide} disabled={install.enabling} aria-busy={install.enabling} onClick={onEnableNow}>{t('installEnableNow')}</Button>
               : <Button variant="primary" className={css.wide} onClick={onClose}>{t('installClose')}</Button>}
         </div>
@@ -1222,9 +1296,10 @@ function InstallDialog({
   )
 }
 
-/** The confirmation an uninstall waits on. */
-function ConfirmDialog({ name, t, onConfirm, onCancel }: {
+/** Shared confirmation for an uninstall or abandoning a prepared update. */
+function ConfirmDialog({ name, action, t, onConfirm, onCancel }: {
   readonly name: string
+  readonly action: ConfirmState['action']
   readonly t: Translate
   readonly onConfirm: () => void
   readonly onCancel: () => void
@@ -1233,14 +1308,14 @@ function ConfirmDialog({ name, t, onConfirm, onCancel }: {
     <Modal
       open
       onClose={onCancel}
-      title={t('confirmUninstallTitle', { name })}
+      title={t(action === 'discardUpdate' ? 'confirmDiscardUpdateTitle' : 'confirmUninstallTitle', { name })}
       closeLabel={t('close')}
-      description={t('confirmUninstallDescription')}
+      description={t(action === 'discardUpdate' ? 'confirmDiscardUpdateDescription' : 'confirmUninstallDescription')}
       footer={(
         <>
           <Button variant="outline" onClick={onCancel}>{t('cancel')}</Button>
           <Button variant="primary" className={css.dangerButton} onClick={onConfirm}>
-            {t('confirmUninstall')}
+            {t(action === 'discardUpdate' ? 'discardUpdate' : 'confirmUninstall')}
           </Button>
         </>
       )}
@@ -1288,6 +1363,8 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   const openRow = view.kind === 'row' && openPkg !== undefined ? openPkg.rows.find(row => row.rowId === view.rowId) : undefined
   const showsCards = openPkg === undefined && openItem === undefined
   const activated = listed.find(pkg => pkg.name === activation && pkg.enabled && !state.busy.includes(pkg.name))
+  const packageBusy = (name: string): boolean => state.busy.includes(name)
+    || (state.install.update?.name === name && isInstallPending(state.install.phase))
   const setRowEnabled = (row: PackageRow, enabled: boolean): void => {
     /* v8 ignore next -- a row without a live entry has its switch disabled */
     if (row.entryId !== undefined) props.setRowEnabled(row.entryId, enabled)
@@ -1302,10 +1379,15 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
       pkg={pkg}
       t={t}
       resolveText={resolveText}
-      busy={state.busy.includes(pkg.name)}
+      busy={packageBusy(pkg.name)}
+      updateBusy={packageBusy(pkg.name) || state.install.requestId !== undefined}
+      update={state.updates[pkg.name]}
       highlighted={state.highlight === pkg.name}
       onOpen={() => { setActivation(null); setView({ kind: 'package', name: pkg.name }) }}
       onSetEnabled={(enabled) => { setActivation(enabled ? pkg.name : null); props.setEnabled(pkg.name, enabled) }}
+      onCheckUpdate={() => { props.checkUpdate(pkg.name) }}
+      onUpdate={() => { props.openUpdate(pkg.name) }}
+      onDiscardUpdate={() => { props.discardUpdate(pkg.name) }}
     />
   )
   // The Official group: the bundles the installation ships, then the plugins that registered their configuration.
@@ -1405,7 +1487,9 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             pkg={openPkg}
             t={t}
             resolveText={resolveText}
-            busy={state.busy.includes(openPkg.name)}
+            busy={packageBusy(openPkg.name)}
+            updateBusy={packageBusy(openPkg.name) || state.install.requestId !== undefined}
+            update={state.updates[openPkg.name]}
             rowBusy={row => row.entryId !== undefined && state.busy.includes(rowKey(row.entryId))}
             configured={ledger.bundles.has(openPkg.name)}
             configure={configure(openPkg)}
@@ -1413,6 +1497,9 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             onBack={() => { setView({ kind: 'list' }) }}
             onSetEnabled={(enabled) => { props.setEnabled(openPkg.name, enabled) }}
             onUninstall={() => { props.uninstall(openPkg.name) }}
+            onCheckUpdate={() => { props.checkUpdate(openPkg.name) }}
+            onUpdate={() => { props.openUpdate(openPkg.name) }}
+            onDiscardUpdate={() => { props.discardUpdate(openPkg.name) }}
             onSetRowEnabled={setRowEnabled}
           />
         )
@@ -1468,6 +1555,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
         ? null
         : (
           <ConfirmDialog
+            action={state.confirm.action}
             name={packageText(
               state.packages.find(pkg => pkg.name === state.confirm?.packageName) ?? { name: state.confirm.packageName },
               resolveText,

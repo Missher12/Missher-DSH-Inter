@@ -67,3 +67,12 @@ it.each([
   await expect(approveBuilds(dir, ['native'])).rejects.toThrow()
   expect(readFileSync(filename, 'utf8')).toBe(original)
 })
+
+it('keeps a name-only approval name-only when pnpm records a file dependency id', async () => {
+  const { dir, filename } = fixture('allowBuilds:\n  addon: set this to true or false\n  other: set this to true or false\n')
+  mkdirSync(join(dir, 'node_modules'))
+  writeFileSync(join(dir, 'node_modules/.modules.yaml'), 'ignoredBuilds:\n  - addon@file:../addon\n  - other@file:../other\n')
+  expect(await approveBuilds(dir, ['addon'])).toBe(true)
+  expect(parse(readFileSync(filename, 'utf8'))).toEqual({ allowBuilds: { addon: true, other: 'set this to true or false' } })
+  expect(readFileSync(join(dir, 'node_modules/.modules.yaml'), 'utf8')).toContain('other@file:../other')
+})
