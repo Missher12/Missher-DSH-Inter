@@ -2096,7 +2096,7 @@ describe('automatic listener and loader composition', () => {
     expect(compactSpy).not.toHaveBeenCalled()
   })
 
-  it('does not retry when cancellation lands during an awaited compaction', async () => {
+  it('does not replace history or retry when cancellation lands during an awaited compaction', async () => {
     const ctx = createContext()
     const compact = new TestCompactionEngine(ctx)
     const controller = new AbortController()
@@ -2105,7 +2105,8 @@ describe('automatic listener and loader composition', () => {
     const generation = session.surface.replaceGeneration
 
     expect(await recover(ctx, agent(session, MODEL), overflow(), controller.signal)).toBe(false)
-    expect(session.surface.replaceGeneration).toBe(generation + 1)
+    expect(session.surface.replaceGeneration).toBe(generation)
+    expect(session.snapshotEvents().some(event => event.type === 'compaction/summary')).toBe(false)
   })
 
   it('maxOverflowRetries:0 disables recovery without disabling post-step pressure', async () => {

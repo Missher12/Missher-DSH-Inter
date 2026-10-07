@@ -90,6 +90,18 @@ describe('defineDomain', () => {
 })
 
 describe('DomainFacility.open', () => {
+  it('rejects drain registration for unopened domains or unsupported backends', async () => {
+    const { facility } = await harness()
+    expect(() => facility.registerDrain('demo', async () => {})).toThrow(expect.objectContaining({ code: 'closed' }))
+    await facility.open(spec)
+    expect(() => facility.registerDrain('demo', async () => {})).toThrow(expect.objectContaining({ code: 'facet-unsupported' }))
+    const close = facility.closeAll()
+    expect(facility.closeAll()).toBe(close)
+    await close
+    await expect(facility.open(spec)).rejects.toMatchObject({ code: 'closed' })
+    expect(() => facility.registerDrain('demo', async () => {})).toThrow(expect.objectContaining({ code: 'closed' }))
+  })
+
   it('opens, reads back stored records, and rejects a second open of the same name', async () => {
     const { facility } = await harness()
     const domain = await facility.open(spec)

@@ -57,6 +57,8 @@ domain.table('workspaces').update(id, (r) => ({ ...r, path: newPath }))
 
 调用方拥有句柄的生命周期，并在功能关闭时用 `domain.close()` 释放它（通常作为其自身的 `ctx.effect` 资源释放函数）；插件卸载时，设施会关闭仍处于打开状态的领域。
 
+异步工作结束后仍需最后写入的消费方，在打开领域后调用 `ctx.storageDomain.registerDrain(domainName, cleanup)`，并将返回的异步资源释放函数注册为 effect。设施与路由后端关闭时等待同一次清理；清理可以写入并关闭自身领域，但不能等待 `closeAll()` 或后端关闭。清理必须停止新工作并自行限制等待时长。一个消费方跨多个后端持有领域时，须为各相关领域登记。领域未打开或设施正在关闭时报 `closed`；后端缺少排空支持时报 `facet-unsupported`。JSON 后端提供此保证；使用不支持的后端时，消费方必须拒绝依赖安全最终写入的工作。
+
 ### 把领域路由到后端
 
 哪个后端服务哪个领域由领域插件的配置决定——绝非枢纽。`backend` 指定默认路由；`routes` 按领域名覆盖。路由到未注册后端的领域会在打开时以 `backend-not-found` 明确报错。

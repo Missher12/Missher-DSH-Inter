@@ -57,6 +57,8 @@ domain.table('workspaces').update(id, (r) => ({ ...r, path: newPath }))
 
 The caller owns the handle's lifecycle and releases it with `domain.close()` when the feature shuts down (typically its own `ctx.effect` disposer); domains still open when the plugin unmounts are closed by the facility.
 
+Consumers with final writes after asynchronous work register `ctx.storageDomain.registerDrain(domainName, cleanup)` after opening the domain and install the returned async disposer as an effect. Facility and routed backend shutdown await the same cleanup; it may write and close its own domains, but must not await `closeAll()` or backend close. Cleanup must stop new work and bound its own wait. Register each relevant domain when one consumer owns domains on different backends. An unopened domain or closing facility rejects with `closed`; a backend without drain support rejects with `facet-unsupported`. The JSON backend supports this guarantee; unsupported backends require the consumer to decline work that depends on safe final writes.
+
 ### Routing domains to backends
 
 The domain plugin's configuration decides which backend serves which domain — never the hub. `backend` names the default route; `routes` overrides it per domain name. A route naming an unregistered backend fails loudly at open with `backend-not-found`.

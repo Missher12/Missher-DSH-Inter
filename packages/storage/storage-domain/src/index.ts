@@ -9,7 +9,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
+import { StorageDrains, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import { DomainError } from './error.ts'
 import { descriptorOf } from './spec.ts'
 import type { DomainSpec } from './spec.ts'
@@ -70,6 +70,8 @@ export class DomainFacility {
   private readonly domains = new Map<string, DomainImpl>()
   /** Names reserved by an in-flight or completed open, so concurrent opens of one name fail loud. */
   private readonly reserved = new Set<string>()
+  private readonly consumers = new StorageDrains()
+  private closing: Promise<void> | undefined
 
   /**
    * @param ctx - Context of the domain plugin; open-domain effects and change
@@ -101,6 +103,7 @@ export class DomainFacility {
    * @returns the opened domain handle, typed by the spec.
    */
   async open<S extends DomainSpec>(spec: S): Promise<Domain<S>> {
+    if (this.closing !== undefined) throw new DomainError('closed', 'domain facility is closed')
     if (this.reserved.has(spec.name)) {
       throw new DomainError('already-open', `domain '${spec.name}' is already open`)
     }
@@ -153,6 +156,8 @@ export class DomainFacility {
         // landing during the drain still emit domain/changed, and the domain
         // stays resolvable (the package invariant cross-checks each event)
         // until fully closed — only then does the name free up for reopening.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the facility can close while records load.
+        if (this.closing !== undefined) throw new DomainError('closed', 'domain facility closed while opening')
         const domain: DomainImpl = new DomainImpl(this.ctx, spec, unit, tables, globalValue, () => {
           this.domains.delete(spec.name)
           this.reserved.delete(spec.name)
@@ -186,13 +191,38 @@ export class DomainFacility {
   }
 
   /**
+   * Keep an open domain and its routed backend writable until consumer work settles.
+   * Facility, backend, and consumer disposal share one cleanup promise. Missing
+   * backend support throws `facet-unsupported`; closing facilities reject registration.
+   * @param name - Name of an already-open domain whose backend must remain writable.
+   * @param drain - Bounded cleanup; may close its domain after final writes, but must not await facility/backend close.
+   * @returns an asynchronous effect disposer that invokes cleanup at most once.
+   */
+  registerDrain(name: string, drain: () => Promise<void>): () => Promise<void> {
+    if (this.closing !== undefined) throw new DomainError('closed', 'domain facility is closed')
+    if (!this.domains.has(name)) throw new DomainError('closed', `domain '${name}' is not open`)
+    const route = this.config.routes?.[name] ?? this.config.backend
+    const backend = this.ctx.storage.backend.get(route)
+    if (backend.registerDrain === undefined) {
+      throw new DomainError('facet-unsupported', `backend '${route}' does not support consumer drain`)
+    }
+    return this.consumers.register(backend.registerDrain(drain))
+  }
+
+  /**
    * Close every domain still open on this facility. The unmount path for
    * consumers that never called `Domain.close()` themselves; closing is
    * idempotent, so double-closing an already-closed domain is harmless.
    * @returns resolution after every unit is released.
    */
-  async closeAll(): Promise<void> {
-    await Promise.all([...this.domains.values()].map(domain => domain.close()))
+  closeAll(): Promise<void> {
+    this.closing ??= Promise.resolve().then(async () => {
+      const drains = await Promise.allSettled([this.consumers.close()])
+      const domains = await Promise.allSettled([...this.domains.values()].map(domain => domain.close()))
+      const failures = [...drains, ...domains].filter(result => result.status === 'rejected').map((result): unknown => result.reason)
+      if (failures.length !== 0) throw new AggregateError(failures, 'domain facility cleanup failed')
+    })
+    return this.closing
   }
 }
 

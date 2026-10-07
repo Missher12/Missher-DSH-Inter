@@ -86,6 +86,7 @@ describe('real Loader composition', () => {
     expect(unloaded).toEqual([])
     expect(loaded.get('toolResultPruner')).toBeInstanceOf(ToolResultPruner)
     expect(loaded.get('compaction')).toBeInstanceOf(BasicCompactionEngine)
+    expect(BasicCompactionEngine.supportsSummaryAbortCommit).toBe(true)
     expect((loaded.compaction as BasicCompactionEngine).config).toMatchObject({
       thresholdRatio: 0.5,
       headroomTokens: 4000,

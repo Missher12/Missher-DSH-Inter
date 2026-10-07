@@ -160,7 +160,8 @@ export function selectCompactableRange(
  * `compaction/start` are synchronously adjacent, so the durable opening marker is
  * the compaction lock before summarization yields. Every later failure makes
  * exactly one `compaction/end` attempt; a failed close deliberately leaves the
- * unmatched start detectable.
+ * unmatched start detectable. Cancellation after summarization rejects the
+ * replacement for both automatic and manual owners.
  * @param dependencies - conversation meter and dynamically dispatched summarizer hook.
  * @param session - session whose surface is mutated.
  * @param start - inclusive first surface-node seq.
@@ -229,7 +230,7 @@ export async function compactSurfaceRegion(
       assertStable,
       signal,
     )
-    if (options.owner === null) signal?.throwIfAborted()
+    signal?.throwIfAborted()
     assertStable(dependencies, session, summarized)
     stage = 'commit'
     const pending = commitCompactionBody(session, startEvent, summarized)

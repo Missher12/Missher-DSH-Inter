@@ -112,6 +112,9 @@ const modelPolicy: z<ModelCompactPolicyConfig> = z.object({
 export class BasicCompactionEngine extends CompactionEngine {
   static inject = ['llm', 'tokenMeter', 'sessions']
 
+  /** Both transaction owners check cancellation after summarization, before committing a replacement. */
+  static readonly supportsSummaryAbortCommit = true
+
   static Config: z<BasicCompactionConfig> = z.object({
     thresholdRatio: thresholdRatioSchema,
     headroomTokens: headroomTokensSchema,
@@ -347,7 +350,8 @@ export class BasicCompactionEngine extends CompactionEngine {
 
   /**
    * Compact one inclusive positional range from the agent-owned surface using
-   * the effective token meter for all retention and shrink pricing.
+   * the effective token meter for all retention and shrink pricing. Cancellation
+   * before the synchronous commit rejects without applying the summary.
    * @param start - inclusive first surface-node seq.
    * @param end - inclusive last surface-node seq.
    * @param agent - owner of the target session, used by the summarizer.

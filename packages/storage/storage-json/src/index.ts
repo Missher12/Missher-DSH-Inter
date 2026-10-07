@@ -9,7 +9,7 @@
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { StorageError, UNIT_NAME_RE, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
+import { StorageDrains, StorageError, UNIT_NAME_RE, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import type { KvFacet, KvUnit, KvUnitDescriptor, StorageBackend } from '@deepseek-ai/dsh-storage'
 import { openSingleUnit } from './single-unit.ts'
 import { openPerRecordUnit } from './per-record-unit.ts'
@@ -41,7 +41,8 @@ export class JsonStorageBackend implements StorageBackend {
   // Reserved synchronously at open() entry so a concurrent open of the same
   // unit fails, and close() can await opens still in flight.
   private readonly opening = new Map<string, Promise<KvUnit>>()
-  private closed = false
+  private readonly consumers = new StorageDrains()
+  private closing: Promise<void> | undefined
 
   constructor(private readonly root: string) {}
 
@@ -49,7 +50,7 @@ export class JsonStorageBackend implements StorageBackend {
     // The body up to the first await runs synchronously, so the opening-slot
     // reservation below still excludes a concurrent open of the same unit.
     open: async (descriptor: KvUnitDescriptor): Promise<KvUnit> => {
-      if (this.closed) throw new StorageError('closed', 'json backend is closed')
+      if (this.closing !== undefined) throw new StorageError('closed', 'json backend is closed')
       validateDescriptor(descriptor)
       if (this.open.has(descriptor.name) || this.opening.has(descriptor.name)) {
         // Double-open is a caller bug, not a medium condition.
@@ -69,7 +70,7 @@ export class JsonStorageBackend implements StorageBackend {
     const unit = descriptor.layout === 'per-record'
       ? await openPerRecordUnit(descriptor, this.root, onClose)
       : await openSingleUnit(descriptor, this.root, onClose)
-    if (this.closed) {
+    if (this.closing !== undefined) {
       // The backend closed while this open was in flight: do not hand out a
       // live unit past close().
       await unit.close()
@@ -79,14 +80,20 @@ export class JsonStorageBackend implements StorageBackend {
     return unit
   }
 
-  async close(): Promise<void> {
-    if (!this.closed) {
-      this.closed = true
-    }
-    await Promise.allSettled([...this.opening.values()])
-    for (const unit of [...this.open.values()]) {
-      await unit.close()
-    }
+  registerDrain(drain: () => Promise<void>): () => Promise<void> {
+    if (this.closing !== undefined) throw new StorageError('closed', 'json backend is closed')
+    return this.consumers.register(drain)
+  }
+
+  close(): Promise<void> {
+    this.closing ??= Promise.resolve().then(async () => {
+      const drains = await Promise.allSettled([this.consumers.close()])
+      await Promise.allSettled([...this.opening.values()])
+      const units = await Promise.allSettled([...this.open.values()].map(unit => unit.close()))
+      const failures = [...drains, ...units].filter(result => result.status === 'rejected').map((result): unknown => result.reason)
+      if (failures.length !== 0) throw new AggregateError(failures, 'json backend cleanup failed')
+    })
+    return this.closing
   }
 }
 

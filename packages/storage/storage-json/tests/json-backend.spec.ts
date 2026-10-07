@@ -30,6 +30,51 @@ runKvBackendContract('json', async () => {
 describe('json backend specifics', () => {
   const descriptor = { name: 'shape', version: 1, tables: ['t'], hasGlobal: true }
 
+  it('keeps existing units writable until consumer cleanup completes', async () => {
+    const root = await freshRoot()
+    const backend = new JsonStorageBackend(root)
+    const unit = await backend.kv.open(descriptor)
+    const held = Promise.withResolvers<undefined>()
+    let calls = 0
+    const dispose = backend.registerDrain(async () => {
+      calls += 1
+      await held.promise
+      await unit.putRecord('t', 'late_usage', { input: 600, output: 40 })
+    })
+    const close = backend.close()
+    expect(backend.close()).toBe(close)
+    expect(() => backend.registerDrain(async () => {})).toThrow(expect.objectContaining({ code: 'closed' }))
+    await expect(backend.kv.open({ ...descriptor, name: 'late_open' })).rejects.toMatchObject({ code: 'closed' })
+    held.resolve(undefined)
+    await Promise.all([close, dispose()])
+    await dispose()
+    expect(calls).toBe(1)
+    const reopened = new JsonStorageBackend(root)
+    try {
+      const restored = await reopened.kv.open(descriptor)
+      expect((await restored.loadAll()).tables.t?.late_usage).toEqual({ input: 600, output: 40 })
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it('closes units after all consumers settle even if one consumer fails', async () => {
+    const root = await freshRoot()
+    const backend = new JsonStorageBackend(root)
+    const unit = await backend.kv.open(descriptor)
+    backend.registerDrain(async () => { throw new Error('consumer failure') })
+    backend.registerDrain(async () => { await unit.putRecord('t', 'last_write', { saved: true }) })
+    await expect(backend.close()).rejects.toThrow('json backend cleanup failed')
+    await expect(unit.putRecord('t', 'too_late', {})).rejects.toMatchObject({ code: 'closed' })
+    const reopened = new JsonStorageBackend(root)
+    try {
+      const restored = await reopened.kv.open(descriptor)
+      expect((await restored.loadAll()).tables.t?.last_write).toEqual({ saved: true })
+    } finally {
+      await reopened.close()
+    }
+  })
+
   it('publishes a human-readable pretty-printed file', async () => {
     const root = await freshRoot()
     const backend = new JsonStorageBackend(root)

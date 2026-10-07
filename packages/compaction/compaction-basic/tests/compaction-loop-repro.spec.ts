@@ -25,7 +25,10 @@ import { Session, SessionId, type SessionEvent, type SurfaceEvent } from '@deeps
  */
 
 class ReproCompactionEngine extends BasicCompactionEngine {
+  afterSummary: (() => void) | undefined
+
   override async summarize(): Promise<{ summary: ContentBlock[]; provider: string; model: string }> {
+    this.afterSummary?.()
     return {
       summary: [{ type: 'text', text: 'CHECKPOINT SUMMARY' }],
       provider: 'mock',
@@ -217,6 +220,60 @@ function overflowHistorySeed(): readonly SessionEvent[] {
 }
 
 describe('CBR-001: a real-loop checkpoint is a valid boundary on both sides', () => {
+  it.each(['summary-return', 'after-summary-promise'] as const)(
+    'preserves history when cancelled at %s before automatic summary commit',
+    async (boundary) => {
+      const { ctx, compact } = await harness(8)
+      try {
+        const { agent } = await ctx.agentLoop.createAgent(ctx, {
+          sessionId: SessionId(`cancel-${boundary}`),
+          seed: overflowHistorySeed(),
+          agentOptions: { provider: 'mock', model: 'mock' },
+        })
+        let before: readonly number[] | undefined
+        let cancelledBeforeCommit = false
+        compact.afterSummary = () => {
+          before = [...agent.session.surface.nodes]
+          const cancel = (): void => {
+            cancelledBeforeCommit = !agent.session.snapshotEvents()
+              .some(event => event.type === 'compaction/summary')
+            agent.cancel({ kind: 'user' })
+          }
+          // The second microtask cancels after the summary wrapper resolves,
+          // before the shared transaction resumes to commit the replacement.
+          if (boundary === 'after-summary-promise') queueMicrotask(() => { queueMicrotask(cancel) })
+          else cancel()
+        }
+        const idle = waitForIdle(ctx, agent)
+        agent.followup(createUserMessage({
+          content: [{ type: 'text', text: 'do a multi-step task with cancellation' }],
+          source: { kind: 'user' },
+        }))
+        await idle
+
+        const events = agent.session.snapshotEvents()
+        expect(cancelledBeforeCommit).toBe(true)
+        expect(before).toBeDefined()
+        expect(agent.session.surface.nodes).toEqual(before)
+        expect(events.filter(event => event.type.startsWith('compaction/')).map(event => event.type))
+          .toMatchInlineSnapshot(`
+            [
+              "compaction/start",
+              "compaction/end",
+            ]
+          `)
+        expect(events.findLast(event => event.type === 'compaction/end')?.data.error).toBeDefined()
+        expect(events.at(-1)).toMatchObject({
+          type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } },
+        })
+        const replay = Session.create(SessionId(`cancel-replay-${boundary}`), events)
+        expect(replay.surface.nodes).toEqual(before)
+      } finally {
+        await ctx.fiber.dispose()
+      }
+    },
+  )
+
   it('uses the model actually routed by agent/request for post-step pressure', async () => {
     const { ctx } = await harness(8)
     ctx.on('agent/request', async (_payload, next) => ({

@@ -36,6 +36,14 @@ interface StorageBackend {
   readonly kv?: KvFacet
 
   /**
+   * Register consumer cleanup that close awaits before releasing any unit.
+   * Optional: consumers requiring final-write safety must reject its absence.
+   * @param drain - Bounded cleanup; may write existing units, but must not await backend close.
+   * @returns an idempotent async effect disposer; registration after closing throws `closed`.
+   */
+  registerDrain?(drain: () => Promise<void>): () => Promise<void>
+
+  /**
    * Drain in-flight writes across all open units and release the medium.
    * Idempotent; concurrent and repeated calls resolve once teardown finishes.
    * @returns resolution after the medium is released.
