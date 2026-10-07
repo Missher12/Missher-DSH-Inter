@@ -232,12 +232,22 @@ async open<S extends DomainSpec>(spec: S): Promise<Domain<S>>
 get(name: string): DomainImpl | undefined
 
 /**
+ * Keep an open domain and its routed backend writable until consumer work settles.
+ * Facility, backend, and consumer disposal share one cleanup promise. Missing
+ * backend support throws `facet-unsupported`; closing facilities reject registration.
+ * @param name - Name of an already-open domain whose backend must remain writable.
+ * @param drain - Bounded cleanup; may close its domain after final writes, but must not await facility/backend close.
+ * @returns an asynchronous effect disposer that invokes cleanup at most once.
+ */
+registerDrain(name: string, drain: () => Promise<void>): () => Promise<void>
+
+/**
  * Close every domain still open on this facility. The unmount path for
  * consumers that never called `Domain.close()` themselves; closing is
  * idempotent, so double-closing an already-closed domain is harmless.
  * @returns resolution after every unit is released.
  */
-async closeAll(): Promise<void>
+closeAll(): Promise<void>
 ```
 
 Source: [`packages/storage/storage-domain/src/index.ts`](../../packages/storage/storage-domain/src/index.ts)

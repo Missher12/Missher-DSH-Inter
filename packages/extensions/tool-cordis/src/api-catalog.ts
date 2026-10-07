@@ -2949,7 +2949,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the open domain runtime, or `undefined` when not open.',
       },
       {
-        signature: 'async closeAll(): Promise<void>',
+        signature: 'registerDrain(name: string, drain: () => Promise<void>): () => Promise<void>',
+        description: 'Keep an open domain and its routed backend writable until consumer work settles. Facility, backend, and consumer disposal share one cleanup promise. Missing backend support throws `facet-unsupported`; closing facilities reject registration.',
+        parameters: [{ name: 'name', description: 'Name of an already-open domain whose backend must remain writable.' }, { name: 'drain', description: 'Bounded cleanup; may close its domain after final writes, but must not await facility/backend close.' }],
+        returns: 'an asynchronous effect disposer that invokes cleanup at most once.',
+      },
+      {
+        signature: 'closeAll(): Promise<void>',
         description: 'Close every domain still open on this facility. The unmount path for consumers that never called `Domain.close()` themselves; closing is idempotent, so double-closing an already-closed domain is harmless.',
         parameters: [],
         returns: 'resolution after every unit is released.',
@@ -7428,7 +7434,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'StorageBackend',
-    declaration: 'export interface StorageBackend {\n    readonly kv?: KvFacet;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface StorageBackend {\n    readonly kv?: KvFacet;\n    registerDrain?(drain: () => Promise<void>): () => Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'StorageForms',
