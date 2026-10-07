@@ -241,6 +241,35 @@ it('disposes an opening guest once and cancels the renderer attachment wait', as
   expect(vi.getTimerCount()).toBe(0)
 })
 
+it.each(['stop', 'takeover'] as const)('does not revive an initializing target after %s when its guest attaches late', async (action) => {
+  vi.useFakeTimers()
+  const reservations: ReturnType<BrowserAutomationHost['reserve']>[] = []
+  host.present.mockImplementationOnce((_owner, reservation) => { reservations.push(reservation) })
+  const opening = request({ action: 'open', url: 'https://fixture.invalid/' })
+  const cancelled = expect(opening).rejects.toThrow()
+  const reservation = reservations[0]
+  if (reservation === undefined) throw new Error('fixture reservation missing')
+  const target = reservation.lease as string as BrowserTargetId
+  const guest = new Guest()
+  guests.set(reservation.lease, guest)
+
+  await automation.control(target, action)
+  automation.attached(reservation.lease, webContents(guest))
+  expect(automation.state(target)?.status).toBe(action === 'stop' ? 'stopped' : 'taken-over')
+  expect(host.publish.mock.calls.some(([state]) => state.status === 'ready')).toBe(false)
+  expect((await request({ action: 'observe', target })).status).toBe('denied')
+  expect((await request({ action: 'navigate', target, url: 'https://fixture.invalid/blocked' })).status).toBe('denied')
+  expect(guest.debugger.sendCommand).not.toHaveBeenCalled()
+  expect(guest.loadURL).not.toHaveBeenCalled()
+
+  await vi.advanceTimersByTimeAsync(40)
+  await cancelled
+  expect(host.release).toHaveBeenCalledOnce()
+  expect(guest.destroyed).toBe(true)
+  expect(automation.state(target)).toBeUndefined()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
 it('settles concurrent close calls through one owned guest release', async () => {
   const target = await open()
   const close = request({ action: 'close', target })
@@ -266,4 +295,43 @@ it('does not let an older pending resume override a newer stop request', async (
   await Promise.all([action, takeover, resume, stop])
   expect(automation.state(target)?.status).toBe('stopped')
   expect((await request({ action: 'observe', target })).status).toBe('denied')
+})
+
+it('returns the reported initialization cause immediately and preserves a failed toolbar state while releasing', async () => {
+  host.present.mockImplementationOnce((_owner, reservation) => {
+    automation.failed(reservation.lease, { code: 'browser-client-initialization-failed', message: 'Browser presentation host unavailable' })
+  })
+  const result = await request({ action: 'open', url: 'https://fixture.invalid/' })
+  expect(result).toMatchObject({ status: 'unavailable', message: 'Browser presentation host unavailable', data: { failure: { code: 'browser-client-initialization-failed' } } })
+  expect(host.publish).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'disconnected', failure: { code: 'browser-client-initialization-failed', message: result.message } }))
+  expect(host.release).toHaveBeenCalledOnce()
+  expect((await request({ action: 'list' })).data).toEqual([])
+})
+
+it('labels an unreported attachment timeout and releases the reservation', async () => {
+  vi.useFakeTimers()
+  host.present.mockImplementationOnce(() => {})
+  const pending = request({ action: 'open', url: 'https://fixture.invalid/' })
+  await vi.advanceTimersByTimeAsync(15_040)
+  expect(await pending).toMatchObject({ status: 'unavailable', data: { failure: { code: 'browser-attach-timeout' } } })
+  expect(host.release).toHaveBeenCalledOnce()
+  expect(host.publish).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'disconnected' }))
+})
+
+it.each([undefined, '', '   ', '\0', 'x'.repeat(8193)])('identifies the missing or malformed open url without a generic text error', (url) => {
+  expect(() => parseBrowserRequest({ owner: first, operation: { action: 'open', url } })).toThrow('Browser open requires a non-empty url')
+})
+
+
+it('releases a guest that disconnects between attachment and the open result', async () => {
+  host.present.mockImplementationOnce((_owner, reservation) => {
+    const guest = new Guest()
+    guests.set(reservation.lease, guest)
+    automation.attached(reservation.lease, webContents(guest))
+    guest.destroy()
+  })
+  const result = await request({ action: 'open', url: 'https://fixture.invalid/' })
+  expect(result).toMatchObject({ status: 'unavailable', data: { failure: { code: 'browser-guest-disconnected' } } })
+  expect(host.release).toHaveBeenCalledOnce()
+  expect((await request({ action: 'list' })).data).toEqual([])
 })

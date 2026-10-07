@@ -1,4 +1,4 @@
-# Desktop local update verification
+# Desktop verification
 
 English | [中文](README.zh.md)
 
@@ -10,10 +10,17 @@ Installed qualification can opt into `DSH_DESKTOP_UPDATE_JOURNAL_DIR`, an absolu
 
 ## Table of Contents
 
+- [Sidebar browser attachment](#verification-browser)
 - [Native overlay visibility](#verification-overlay)
 - [Evidence](#verification-evidence)
 - [Manual walkthrough](#verification-interactive)
 - [Open verification](#verification-open)
+
+<a id="verification-browser"></a>
+
+## Sidebar browser attachment
+
+Run `DSH_BROWSER_NATIVE_ELECTRON_APP=/path/to/Electron.app node apps/desktop/tests/fixtures/run-browser-sidebar-native.mjs` from the repository root with an isolated macOS Electron 44 carrier. The runner copies the carrier into a unique temporary directory and runs the production Sidebar frame, presentation, preload, reservation IPC and guest owner. It first reproduces the old pre-attachment state failure, then checks opening, form input readback, concurrent targets and explicit initialization/partition rejection. Each process owns a fresh profile and a loopback page. The JSON assertions and independent DOM readback establish this scope; a window PNG does not establish compositor freshness, real model behavior or daily installation.
 
 <a id="verification-overlay"></a>
 

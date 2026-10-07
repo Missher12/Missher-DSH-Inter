@@ -17,6 +17,7 @@ export function electronFixture(initial?: BrowserTabState, modelState?: DesktopB
     automationVersion: 1,
     claim: vi.fn(async (_lease: DesktopBrowserLeaseId) => reservation),
     state: vi.fn(async (_lease: DesktopBrowserLeaseId) => modelState),
+    reportFailure: vi.fn(async (_lease: DesktopBrowserLeaseId, _failure: Parameters<NonNullable<DesktopBrowserBridge['reportFailure']>>[1]) => {}),
     control: vi.fn(async (_lease: DesktopBrowserLeaseId, _action: Parameters<NonNullable<DesktopBrowserBridge['control']>>[1]) => {}),
     onState: (listener: (state: DesktopBrowserState) => void) => { states.add(listener); return () => { states.delete(listener) } },
     acquire: vi.fn(async (_workspace: string) => reservation),

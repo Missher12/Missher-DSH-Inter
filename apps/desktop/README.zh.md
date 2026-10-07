@@ -102,6 +102,8 @@ Electron 拥有 `$DSH_HOME/profiles/desktop`。其 `dependencies` 包含 pnpm �
 
 只有主应用窗口启用 `<webview>`。guest 挂载必须匹配主进程签发的租约和分区；guest 保持 sandbox、context isolation 和 Web security，不启用 Node integration 或 guest preload。Browser IPC 监听只为应用文档创建。[Sidebar Browser](../../packages/client/ui-sidebar-browser/README.zh.md) 说明存储分组和 guest 限制；Host 鉴权仍独立于 URL 过滤而必需。
 
+预约状态读取只要求租约归属正确，在 guest 尚未创建时也有效。主进程验证初始租约和 partition 后，在同步的 `web-contents-created` 事件中登记原生 guest ID，并在挂载时再次核验该预约。两处都检查所属窗口与 Chromium session；不会在 `dom-ready` 时从页面 URL 反解归属。待创建记录在下一个 microtask 过期，无关的后续 guest 因而不能占用预约。初始化拒绝原因会传到标签页和工具结果；Host IPC 只发送有界、脱敏的错误码和消息，不发送堆栈或请求内容。
+
 `dsh-app://shell/` 无需联系 Host 即可提供打包的更新文档、脚本和样式。静态请求保留 GET/HEAD、路径范围和 MIME 处理；每个更新文档继续使用隔离 preload 和所属窗口的 IPC 校验。
 
 产品 UI 保留 Web 操作，包括通过共享认证 HTTP 路由执行的“打开方式…”。Desktop 使用 Web 的自动目录选择机制，并以共享 Web 模板的 bundle 列表初始化新 profile。

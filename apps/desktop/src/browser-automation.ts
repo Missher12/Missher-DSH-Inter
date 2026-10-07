@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
 import type {
-  BrowserOwner, BrowserTargetId, BrowserSnapshotId, DesktopBrowserRequest, DesktopBrowserResult, DesktopBrowserState,
+  BrowserOwner, BrowserTargetId, BrowserSnapshotId, DesktopBrowserFailure, DesktopBrowserRequest, DesktopBrowserResult, DesktopBrowserState,
 } from '@deepseek-ai/dsh-browser-use/desktop'
 import type { DesktopBrowserLeaseId, DesktopBrowserReservation } from '@deepseek-ai/dsh-client-ui-sidebar-browser/types'
 
@@ -48,7 +48,8 @@ export class DesktopBrowserAutomation {
   /** @param lease - main-issued guest. @param guest - attached webContents. */
   attached(lease: DesktopBrowserLeaseId, guest: WebContents): void {
     const entry = this.entries.get(lease as string as BrowserTargetId)
-    if (entry === undefined || entry.closing !== undefined) return
+    if (this.stopped || entry === undefined || entry.closing !== undefined
+      || entry.state.status !== 'initializing' || entry.state.failure !== undefined) return
     entry.guest = guest
     guest.on('did-start-navigation', (_event, _url, _inPlace, main) => { if (main) this.invalidate(entry) })
     guest.on('render-process-gone', () => { this.change(entry, 'disconnected'); this.invalidate(entry) })
@@ -69,6 +70,15 @@ export class DesktopBrowserAutomation {
 
   /** @param target - owned lease. @returns content-free state for trusted UI. */
   state(target: string): DesktopBrowserState | undefined { return this.entries.get(target as BrowserTargetId)?.state }
+
+  /** @param lease - owned initializing reservation. @param failure - bounded attachment diagnosis. */
+  failed(lease: DesktopBrowserLeaseId, failure: DesktopBrowserFailure): void {
+    const entry = this.entries.get(lease as string as BrowserTargetId)
+    if (entry === undefined || entry.closing !== undefined || entry.state.status !== 'initializing') return
+    entry.state = { ...entry.state, status: 'disconnected', failure }
+    console.error(`Browser initialization failed [${failure.code}]: ${failure.message}`)
+    this.publish(entry.state)
+  }
 
   /** @param target - trusted UI target. @param action - explicit user control. @returns committed state. */
   async control(target: string, action: 'stop' | 'takeover' | 'resume'): Promise<DesktopBrowserState> {
@@ -117,12 +127,20 @@ export class DesktopBrowserAutomation {
         this.host.present(owner, reservation, op.url)
         this.publish(entry.state)
         const deadline = Date.now() + 15_000
-        while (entry.guest === undefined && Date.now() < deadline) {
+        while (entry.guest === undefined && entry.state.failure === undefined && Date.now() < deadline) {
           active.throwIfAborted()
           await new Promise(resolve => setTimeout(resolve, 40))
         }
         active.throwIfAborted()
-        if (entry.guest === undefined) { await this.close(entry); return result('unavailable', 'Open this session in the desktop window, then retry opening a browser tab.') }
+        if (entry.guest === undefined || entry.guest.isDestroyed() || entry.state.status === 'disconnected') {
+          const failure = entry.state.failure ?? (entry.guest === undefined
+            ? { code: 'browser-attach-timeout', message: 'Browser webview did not attach within 15 seconds. Check the tab initialization error and Desktop attachment log.' }
+            : { code: 'browser-guest-disconnected', message: 'Browser webview disconnected before opening completed. Open a new tab after checking the Desktop log.' })
+          entry.state = { ...entry.state, status: 'disconnected', failure }
+          this.publish(entry.state)
+          await this.close(entry)
+          return { ...result('unavailable', failure.message), data: { failure } }
+        }
         return { ...result('delivered', 'A visible Sidebar tab was opened. Observe it before acting.'), target }
       } catch (error) { await this.close(entry); throw error }
       finally { entry.pending.delete(opening) }
@@ -255,6 +273,7 @@ export class DesktopBrowserAutomation {
   }
   private change(entry: Entry, status: DesktopBrowserState['status'], operation?: string): void {
     entry.state = { target: entry.state.target, sessionId: entry.owner.sessionId, status, storage: entry.state.storage,
+      ...(entry.state.failure === undefined ? {} : { failure: entry.state.failure }),
       ...(operation === undefined ? {} : { operation }) }
     this.publish(entry.state)
   }
@@ -263,7 +282,12 @@ export class DesktopBrowserAutomation {
   }
   private close(entry: Entry): Promise<void> {
     if (entry.closing !== undefined) return entry.closing
-    this.take(entry, 'stopped')
+    if (entry.state.failure === undefined) this.take(entry, 'stopped')
+    else {
+      entry.controlRevision++
+      this.invalidate(entry)
+      for (const pending of entry.pending) pending.abort()
+    }
     entry.closing = (async () => {
       try { await entry.tail; await this.host.release(entry.reservation.lease) }
       finally { this.entries.delete(entry.state.target) }

@@ -46,6 +46,8 @@ The `browser.new` command opens a separate Browser page in the focused dock pane
 
 When a compatible Desktop browser provider opens a model-controlled tab, the Sidebar claims the main-issued reservation and shows that same guest. Its control bar displays the owning Session, current operation, control state, and temporary or retained sign-in storage. Stop, takeover, resume, one-download permission, and the preference to retain sign-in for future tabs all require explicit user gestures through the trusted Desktop bridge. Manual tabs keep their ordinary navigation behavior.
 
+Initialization failures display their available reason even when Electron supplies no numeric error code. A failed model tab leaves the preparing state, releases its reservation, and does not replay the open request. The user can open a new tab after resolving the reported cause.
+
 The toolbar provides Back, Forward, Reload, Go, and Open in system browser. Web also offers a per-tab sandbox toggle; disabling it is temporary and displays an amber warning with neutral text. Desktop shows the observed page title. After a restart, Browser shows the saved title and URL; Restore or Reload opens that address only when requested.
 
 -----

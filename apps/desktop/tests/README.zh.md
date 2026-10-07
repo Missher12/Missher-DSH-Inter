@@ -1,4 +1,4 @@
-# Desktop 本地更新验证
+# Desktop 验证
 
 [English](README.md) | 中文
 
@@ -10,10 +10,17 @@
 
 ## 目录
 
+- [侧栏浏览器挂载](#verification-browser)
 - [原生浮层可见性](#verification-overlay)
 - [验证证据](#verification-evidence)
 - [手动演练](#verification-interactive)
 - [待验证事项](#verification-open)
+
+<a id="verification-browser"></a>
+
+## 侧栏浏览器挂载
+
+在仓库根目录，使用隔离的 macOS Electron 44 载体运行 `DSH_BROWSER_NATIVE_ELECTRON_APP=/path/to/Electron.app node apps/desktop/tests/fixtures/run-browser-sidebar-native.mjs`。runner 将载体复制到唯一临时目录，运行生产侧栏 frame、presentation、preload、预约 IPC 和 guest 所有者。它先复现挂载前读取状态的旧故障，再检查开页、表单输入回读、并发目标及明确的初始化或 partition 拒绝。每个进程使用全新 profile 和本地回环页面。JSON 断言和独立 DOM 回读仅证明此范围；窗口 PNG 不证明合成帧新鲜度、真实模型行为或日常安装。
 
 <a id="verification-overlay"></a>
 

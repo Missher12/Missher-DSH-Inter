@@ -26,6 +26,8 @@ export type DesktopBrowserOperation =
   | { readonly action: 'wait'; readonly target: BrowserTargetId; readonly text: string; readonly timeoutMs: number }
 /** Browser transport envelope; ownership is separate from operation arguments. */
 export interface DesktopBrowserRequest { readonly owner: BrowserOwner; readonly operation: DesktopBrowserOperation }
+/** Bounded initialization diagnosis, without page content or a stack trace. */
+export interface DesktopBrowserFailure { readonly code: string; readonly message: string }
 /** Process-local state projected to the trusted application renderer. */
 export interface DesktopBrowserState {
   readonly target: BrowserTargetId
@@ -33,6 +35,7 @@ export interface DesktopBrowserState {
   readonly status: 'initializing' | 'ready' | 'running' | 'taken-over' | 'stopped' | 'disconnected'
   readonly storage: 'temporary' | 'persistent'
   readonly operation?: string
+  readonly failure?: DesktopBrowserFailure
 }
 /** Result data passes through the ordinary tool log and attachment admission. */
 export interface DesktopBrowserResult {

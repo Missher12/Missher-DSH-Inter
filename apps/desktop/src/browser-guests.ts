@@ -3,12 +3,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron'
 import type { DesktopBrowserLeaseId, DesktopBrowserOpenRequest, DesktopBrowserReservation } from '@deepseek-ai/dsh-client-ui-sidebar-browser/types'
 import { DESKTOP_IPC } from './ipc.ts'
+import type { DesktopBrowserFailure } from '@deepseek-ai/dsh-browser-use/desktop'
 
 interface GuestLease {
   readonly owner: WebContents
   readonly partition: string
   attached: boolean
   guest?: WebContents
+  pendingGuest?: WebContents
   releaseInput?: () => void
 }
 
@@ -16,6 +18,7 @@ interface GuestLease {
 export class DesktopBrowserGuests {
   private readonly partitions = new Map<string, string>()
   private readonly leases = new Map<DesktopBrowserLeaseId, GuestLease>()
+  private readonly guestLeases = new Map<number, DesktopBrowserLeaseId>()
 
   /** @param hostUrl - current authenticated DSH Host, which guests cannot request. */
   constructor(
@@ -67,6 +70,12 @@ export class DesktopBrowserGuests {
     return lease
   }
 
+  /** @param owner - authenticated caller. @param id - reservation, which need not be attached. @returns validated lease identity. */
+  assertOwned(owner: WebContents, id: unknown): DesktopBrowserLeaseId {
+    this.owned(owner, id)
+    return id as DesktopBrowserLeaseId
+  }
+
   /**
    * Release only a lease issued to this application window; workspace storage survives.
    * @param owner - authenticated IPC sender.
@@ -80,7 +89,8 @@ export class DesktopBrowserGuests {
     if (lease.owner !== owner) throw new Error('desktop browser: guest belongs to another window')
     lease.releaseInput?.()
     this.leases.delete(key)
-    const guest = lease.guest
+    const guest = lease.guest ?? lease.pendingGuest
+    if (guest !== undefined) this.guestLeases.delete(guest.id)
     if (guest !== undefined && !guest.isDestroyed()) {
       const destroyed = new Promise<void>((resolve) => { guest.once('destroyed', resolve) })
       guest.close({ waitForBeforeUnload: false })
@@ -94,14 +104,41 @@ export class DesktopBrowserGuests {
    * @param attachInput - attaches native input after guest ownership is verified and returns its disposer.
    */
   bind(window: BrowserWindow, attachInput: (guest: WebContents, name: DesktopBrowserLeaseId) => () => void,
-    attached?: (lease: DesktopBrowserLeaseId, guest: WebContents) => void): void {
+    attached?: (lease: DesktopBrowserLeaseId, guest: WebContents) => void,
+    failed?: (lease: DesktopBrowserLeaseId, failure: DesktopBrowserFailure) => void): void {
     const owner = window.webContents
+    let creating: { id: DesktopBrowserLeaseId; lease: GuestLease } | undefined
+    // Electron creates webContents synchronously immediately after will-attach returns.
+    // This one-call boundary expires at the next microtask; it is never a FIFO of tabs.
+    const created = (_event: Electron.Event, guest: WebContents): void => {
+      const current = creating
+      if (current === undefined || guest.getType() !== 'webview' || guest.hostWebContents !== owner
+        || guest.session !== session.fromPartition(current.lease.partition) || this.leases.get(current.id) !== current.lease) return
+      creating = undefined
+      current.lease.pendingGuest = guest
+      this.guestLeases.set(guest.id, current.id)
+      guest.once('destroyed', () => {
+        current.lease.releaseInput?.()
+        this.guestLeases.delete(guest.id)
+        this.leases.delete(current.id)
+      })
+    }
+    app.on('web-contents-created', created)
+    owner.once('destroyed', () => { app.off('web-contents-created', created) })
     owner.on('will-attach-webview', (event, preferences, params) => {
       const id = typeof params.src === 'string' && params.src.startsWith('about:blank#')
         ? params.src.slice('about:blank#'.length) : ''
       const lease = this.leases.get(id as DesktopBrowserLeaseId)
-      if (lease === undefined || lease.owner !== owner || lease.attached || params.partition !== lease.partition) {
+      if (lease === undefined || lease.owner !== owner || lease.attached
+        || params.partition !== lease.partition || creating !== undefined) {
         event.preventDefault()
+        const reason = lease === undefined ? 'unknown lease or invalid initial URL'
+          : lease.owner !== owner ? 'foreign window' : lease.attached ? 'lease already attached'
+            : params.partition !== lease.partition ? 'partition mismatch' : 'overlapping guest creation'
+        console.error(`Browser webview attachment rejected: ${reason}`)
+        // A rejected duplicate or foreign caller must not invalidate an existing guest.
+        if (lease?.owner === owner && !lease.attached) failed?.(id as DesktopBrowserLeaseId,
+          { code: 'browser-attach-rejected', message: `Browser webview attachment rejected: ${reason}` })
         return
       }
       lease.attached = true
@@ -117,26 +154,31 @@ export class DesktopBrowserGuests {
         devTools: !app.isPackaged,
       })
       params.httpreferrer = ''
+      const current = { id: id as DesktopBrowserLeaseId, lease }
+      creating = current
+      queueMicrotask(() => {
+        if (creating !== current) return
+        creating = undefined
+        failed?.(current.id, { code: 'browser-guest-not-created', message: 'Electron did not create the approved browser guest during attachment.' })
+      })
     })
     owner.on('did-attach-webview', (_event, guest) => {
-      let attachedLease: DesktopBrowserLeaseId | undefined
-      // The first document is an inert about:blank carrying the approved lease.
-      // Bind on the main-process event before the renderer can navigate the ready guest.
-      guest.once('dom-ready', () => {
-        const url = guest.getURL()
-        const id = (url.startsWith('about:blank#') ? url.slice('about:blank#'.length) : '') as DesktopBrowserLeaseId
-        const lease = this.leases.get(id)
-        if (lease === undefined || lease.owner !== owner || lease.guest !== undefined) {
-          guest.close({ waitForBeforeUnload: false })
-          return
-        }
-        lease.guest = guest
-        attachedLease = id
-        lease.releaseInput = attachInput(guest, id)
-        attached?.(id, guest)
-        guest.once('destroyed', () => { lease.releaseInput?.(); this.leases.delete(id) })
-      })
+      const id = this.guestLeases.get(guest.id)
+      const lease = id === undefined ? undefined : this.leases.get(id)
+      if (id === undefined || lease === undefined || lease.owner !== owner || !lease.attached || lease.guest !== undefined
+        || lease.pendingGuest !== guest || guest.hostWebContents !== owner || guest.session !== session.fromPartition(lease.partition)) {
+        console.error('Browser webview binding rejected: missing or mismatched native guest reservation')
+        if (id !== undefined && lease?.owner === owner && lease.guest === undefined) failed?.(id,
+          { code: 'browser-guest-binding-rejected', message: 'Browser webview binding rejected: missing or mismatched native guest reservation' })
+        guest.close({ waitForBeforeUnload: false })
+        return
+      }
+      lease.guest = guest
+      delete lease.pendingGuest
+      lease.releaseInput = attachInput(guest, id)
+      attached?.(id, guest)
       guest.setWindowOpenHandler(({ url, postBody }) => {
+        const attachedLease = this.guestLeases.get(guest.id)
         const lease = attachedLease === undefined ? undefined : this.leases.get(attachedLease)
         if (attachedLease !== undefined && lease?.guest === guest && lease.owner === owner && !owner.isDestroyed()
           && postBody === undefined && this.allowedNavigation(url)) {

@@ -188,6 +188,7 @@
   // and the package test glob above needs no per-file entry.
   "exclude": [
     "apps/desktop/tests/keyboard.spec.ts",
+    "apps/desktop/tests/fixtures/browser-sidebar-renderer.ts",
     "packages/client/*/src/**",
     "benchmarks/**/*.client.ts",
     "benchmarks/**/*.client.tsx",
