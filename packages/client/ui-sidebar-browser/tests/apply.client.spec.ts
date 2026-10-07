@@ -55,8 +55,8 @@ async function boot(platform: ShortcutPlatform = 'macos', runtime: 'desktop' | '
   }
   const openTabs = createSnapshotStore<readonly { sessionId: string; tabId: TabId }[]>([])
   const target = { sessionId: 'session', paneId: 'pane' }
-  const sidebar = { openTabs, commandTarget: vi.fn<() => typeof target | undefined>(() => target),
-    openTabFromTarget: vi.fn(), openTabIn: vi.fn() }
+  const sidebar = { openTabs, mounted: createSnapshotStore<string | undefined>('model-session'), commandTarget: vi.fn<() => typeof target | undefined>(() => target),
+    openTabFromTarget: vi.fn(), openTabIn: vi.fn(() => true) }
   const registry = new ShortcutRegistry(runtime, platform)
   ctx.provide('sidebarRight', sidebar as never)
   ctx.provide('shortcuts', { register: (command: ShortcutCommand) => registry.register(command) } as never)
@@ -193,4 +193,30 @@ it('opens each main-created model reservation in its owning session and removes 
   })
   await h.fiber.dispose()
   expect(listeners.size).toBe(0)
+})
+
+it('reports an unmounted task immediately without opening a different session or hiding a presentation exception', async () => {
+  const listeners = new Set<(request: import('../src/types.ts').DesktopBrowserModelOpen) => void>()
+  const reportFailure = vi.fn<NonNullable<DesktopBrowserBridge['reportFailure']>>(async () => {})
+  const bridge: DesktopBrowserBridge = {
+    automationVersion: 1, acquire: vi.fn(), release: vi.fn(), onOpenRequested: () => () => {}, reportFailure,
+    onModelOpen(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
+  }
+  vi.stubGlobal('dshDesktop', { protocolVersion: 1, browser: bridge })
+  const h = await boot()
+  for (const listener of listeners) listener({ sessionId: 'hidden-session', lease: 'hidden-lease' as DesktopBrowserLeaseId, url: 'https://fixture.example/' })
+  expect(h.sidebar.openTabIn).not.toHaveBeenCalled()
+  expect(reportFailure.mock.calls[0]?.[0]).toBe('hidden-lease')
+  expect(reportFailure.mock.calls[0]?.[1].message).toContain('Sidebar is not mounted')
+  h.sidebar.openTabIn.mockReturnValueOnce(false)
+  for (const listener of listeners) listener({ sessionId: 'model-session', lease: 'initializing-lease' as DesktopBrowserLeaseId, url: 'https://fixture.example/' })
+  expect(reportFailure.mock.calls[1]?.[0]).toBe('initializing-lease')
+  expect(reportFailure.mock.calls[1]?.[1].message).toContain('still initializing')
+  h.sidebar.openTabIn.mockImplementationOnce(() => { throw new Error('fixture unavailable') })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    for (const listener of listeners) listener({ sessionId: 'model-session', lease: 'failed-lease' as DesktopBrowserLeaseId, url: 'https://fixture.example/' })
+    expect(reportFailure.mock.calls[2]?.[0]).toBe('failed-lease')
+    expect(reportFailure.mock.calls[2]?.[1].message).toContain('could not create')
+  } finally { log.mockRestore() }
 })

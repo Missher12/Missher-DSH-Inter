@@ -48,6 +48,8 @@ When a compatible Desktop browser provider opens a model-controlled tab, the Sid
 
 Initialization failures display their available reason even when Electron supplies no numeric error code. A failed model tab leaves the preparing state, releases its reservation, and does not replay the open request. The user can open a new tab after resolving the reported cause.
 
+Model-created tabs require their task to be open in the Desktop window. An unmounted or still-initializing Sidebar reports the reason immediately without switching tasks. Automation bounds operation waits and blocks resume while interrupted native work is still settling. Close and reopen the owned tab, or inspect current state before resuming. Screenshots use a new Chromium capture and reject navigation-crossed or invalid images.
+
 The toolbar provides Back, Forward, Reload, Go, and Open in system browser. Web also offers a per-tab sandbox toggle; disabling it is temporary and displays an amber warning with neutral text. Desktop shows the observed page title. After a restart, Browser shows the saved title and URL; Restore or Reload opens that address only when requested.
 
 -----

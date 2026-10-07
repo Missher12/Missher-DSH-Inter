@@ -84,6 +84,15 @@ function harness() {
 }
 
 describe('SidebarRightController — opening', () => {
+  it('acknowledges placement and refuses an on-screen Session before its store is adopted', () => {
+    const h = harness()
+    h.publish()
+    expect(h.controller.openTabIn(SESSION, 'text')).toBe(true)
+    expect(h.controller.tabsIn(SESSION).some(tab => tab.kind === 'text')).toBe(true)
+    h.unadopt()
+    expect(h.controller.mounted.getSnapshot()).toBe(SESSION)
+    expect(h.controller.openTabIn(SESSION, 'text')).toBe(false)
+  })
   it('keeps independently opened instances distinct when they return to the same pane', () => {
     const h = harness()
     h.tabs.register({ id: 'test/terminal', kind: 'terminal', multiple: true, title: () => 'terminal' })

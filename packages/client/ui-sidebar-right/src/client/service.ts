@@ -354,10 +354,13 @@ export class SidebarRightController implements ISidebarRight {
    * @param sessionId - the session the acting tab is in.
    * @param kind - the page type's kind.
    * @param options - placement and that kind's navigation parameters.
+   * @returns false when the Session store has not been adopted; true after placement.
    */
-  openTabIn<K extends string>(sessionId: SessionId, kind: K, options: SidebarRightOpenTabOptions<K> = {}): void {
+  openTabIn<K extends string>(sessionId: SessionId, kind: K, options: SidebarRightOpenTabOptions<K> = {}): boolean {
     const actions = this.actionsFor(sessionId)
-    if (actions !== undefined) this.placeTab(sessionId, actions, kind, options)
+    if (actions === undefined) return false
+    this.placeTab(sessionId, actions, kind, options)
+    return true
   }
 
   /**

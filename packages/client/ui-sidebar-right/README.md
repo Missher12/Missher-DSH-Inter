@@ -154,6 +154,8 @@ None; this package neither assembles nor sends a provider request.
 
 None.
 
+`openTabIn` returns whether the Session store accepted placement. A Session selected before its store is adopted returns `false`, so callers can report initialization rather than wait for content that was never mounted.
+
 </details>
 
 **Runtime invariant:** No companion is published. The two services (`sidebarRight`, `sidebarRightTabs`) are provided through `ctx.reflect.provide` inside one effect and torn down with it; the on-screen Session and the Tab domain's occurrence lifetimes are asserted directly by this package's specs, and no independent observation exists to diverge from them.

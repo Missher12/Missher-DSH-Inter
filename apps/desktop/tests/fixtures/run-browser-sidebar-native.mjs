@@ -28,6 +28,7 @@ const resources = join(appCopy, 'Contents/Resources/app')
 await mkdir(resources, { recursive: true })
 await writeFile(join(resources, 'package.json'), '{"name":"dsh-sidebar-native-fixture","version":"1.0.0","main":"index.cjs"}\n')
 await copyFile(join(fixtures, 'browser-sidebar-native.cjs'), join(resources, 'index.cjs'))
+await copyFile(join(fixtures, 'browser-sidebar-rendering.cjs'), join(resources, 'browser-sidebar-rendering.cjs'))
 const imports = ['browser-guests', 'browser-automation', 'browser-reservation-ipc', 'ipc']
 await build({ absWorkingDir: repository, stdin: { contents: imports.map(name => `export * from ${JSON.stringify(join(repository, 'apps/desktop/src', `${name}.ts`))};`).join('\n'), resolveDir: repository, loader: 'ts' },
   bundle: true, platform: 'node', format: 'cjs', external: ['electron'], outfile: join(resources, 'host.cjs') })
@@ -75,7 +76,7 @@ async function run(mode) {
   return result
 }
 const results = {}
-for (const mode of ['baseline', 'fixed']) {
+for (const mode of ['baseline', 'fixed', 'rendering']) {
   try { results[mode] = { status: 'passed', result: await run(mode) } }
   catch (error) {
     console.error(error)

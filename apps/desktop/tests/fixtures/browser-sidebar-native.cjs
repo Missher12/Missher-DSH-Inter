@@ -3,13 +3,14 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const http = require('node:http')
-const { app, BrowserWindow, ipcMain, session } = require('electron')
+const { app, BrowserWindow, ipcMain, session, nativeImage } = require('electron')
 const { DesktopBrowserGuests, DesktopBrowserAutomation, installBrowserReservationIpc, DESKTOP_IPC } = require('./host.cjs')
+const rendering = require('./browser-sidebar-rendering.cjs')
 process.on('uncaughtException', error => { console.error('Uncaught fixture error', error); app.exit(1) })
 
 const root = process.env.DSH_BROWSER_NATIVE_FIXTURE
 const mode = process.env.DSH_BROWSER_NATIVE_MODE
-assert.ok(root && ['baseline', 'fixed'].includes(mode), 'Only the isolated runner may launch this fixture')
+assert.ok(root && ['baseline', 'fixed', 'rendering'].includes(mode), 'Only the isolated runner may launch this fixture')
 const userData = path.join(root, mode, 'user-data')
 fs.mkdirSync(userData, { recursive: true, mode: 0o700 })
 app.setPath('userData', userData)
@@ -28,10 +29,14 @@ async function until(predicate, message) {
 }
 app.whenReady().then(async () => {
   const html = '<title>Owned sidebar fixture</title><label>Display name <input aria-label="Display name" id="name"></label><button id="save" onclick="document.querySelector(\'#result\').textContent=\'Saved: \'+document.querySelector(\'#name\').value">Save</button><p id="result">Waiting</p>'
-  server = http.createServer((_request, response) => { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(html) })
+    + '<canvas id="canvas" width="120" height="120" style="position:fixed;top:150px;left:20px"></canvas><button style="position:fixed;top:280px;left:20px" onclick="paint(\'#0000ff\')">Change canvas</button><div style="height:2400px">Scroll fixture</div><script>function paint(color){let ctx=document.querySelector("canvas").getContext("2d");ctx.fillStyle=color;ctx.fillRect(0,0,120,120)}paint("#ff0000")</script>'
+  server = http.createServer((request, response) => {
+    if (mode === 'rendering' && rendering.serve(request, response)) return
+    response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(mode === 'rendering' ? rendering.html : html)
+  })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `http://127.0.0.1:${server.address().port}`
-  window = new BrowserWindow({ width: 1000, height: 740, show: true, title: `DSH owned Sidebar fixture ${mode}`,
+  window = new BrowserWindow({ width: 1000, height: 740, show: mode !== 'rendering', title: `DSH owned Sidebar fixture ${mode}`,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webviewTag: true } })
   const assertSender = event => { assert.equal(event.sender, window.webContents); assert.equal(event.senderFrame, window.webContents.mainFrame) }
   const guests = new DesktopBrowserGuests(() => 'http://127.0.0.1:19387')
@@ -75,6 +80,7 @@ app.whenReady().then(async () => {
   const ready = new Promise(resolve => ipcMain.once('fixture:ready', event => { assertSender(event); resolve() }))
   await window.loadFile(path.join(__dirname, 'renderer.html'))
   await ready
+  if (mode === 'rendering') window.showInactive()
   const owner = sessionId => ({ sessionId, activationId: `activation-${sessionId}` })
   const request = (sessionId, operation) => automation.request({ owner: owner(sessionId), operation }, new AbortController().signal)
   const open = async (sessionId, pathname = '/') => {
@@ -82,7 +88,9 @@ app.whenReady().then(async () => {
     const value = await request(sessionId, { action: 'open', url: origin + pathname })
     return { value, elapsedMs: Math.round(performance.now() - started) }
   }
-  if (mode === 'baseline') {
+  if (mode === 'rendering') {
+    await rendering.run({ window, request, open, attached, root, checks, automation })
+  } else if (mode === 'baseline') {
     const result = await open('baseline-session')
     assert.equal(result.value.status, 'unavailable')
     assert.match(result.value.message, /Browser target unavailable/)
@@ -117,6 +125,46 @@ app.whenReady().then(async () => {
     assert.equal(await attached.get(target).executeJavaScript('document.querySelector("#result").textContent'), 'Saved: Real Sidebar path')
     assert.equal((await request('other-session', { action: 'observe', target })).status, 'stale-target')
     checks.push({ name: 'production client/preload/IPC/guest chain and form readback', target, guestId: attached.get(target).id })
+    const guest = attached.get(target)
+    const image = async label => {
+      const result = await request('first-session', { action: 'screenshot', target })
+      assert.equal(result.status, 'observed', JSON.stringify(result))
+      const bytes = Buffer.from(result.image.data, 'base64')
+      fs.writeFileSync(path.join(root, mode, label + '.png'), bytes)
+      const picture = nativeImage.createFromBuffer(bytes)
+      const viewport = await guest.executeJavaScript('({width:innerWidth,height:innerHeight})')
+      const scale = picture.getSize().width / viewport.width
+      const pixel = picture.crop({ x: Math.round(40 * scale), y: Math.round(170 * scale), width: 1, height: 1 }).toBitmap()
+      return { bytes: bytes.length, size: picture.getSize(), pixel: [...pixel] }
+    }
+    const beforeImage = await image('canvas-visible-before')
+    assert.deepEqual(beforeImage.pixel.slice(0, 3), [0, 0, 255], 'Fixture canvas starts red in native BGRA bitmap')
+    const cover = new BrowserWindow({ width: 1020, height: 760, show: true, title: 'Owned background acceptance cover' })
+    await cover.loadURL('data:text/html,<title>Owned cover</title>Background browser acceptance')
+    cover.focus()
+    await until(() => !window.isFocused() && cover.isFocused(), 'Fixture browser must be genuinely backgrounded')
+    const scrollState = await request('first-session', { action: 'observe', target })
+    const scrollStarted = performance.now()
+    const scrolled = await request('first-session', { action: 'scroll', target, snapshot: scrollState.snapshot, delta: 450 })
+    assert.equal(scrolled.status, 'delivered', JSON.stringify(scrolled))
+    let scrollY = 0
+    for (let i = 0; i < 30 && scrollY === 0; i++) {
+      scrollY = await guest.executeJavaScript('scrollY')
+      if (scrollY === 0) await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.ok(scrollY > 0, 'Independent world readback must confirm background scroll')
+    assert.equal(window.isFocused(), false, 'Browser must not steal foreground')
+    const background = await request('first-session', { action: 'observe', target })
+    const paintButton = background.data.nodes.find(node => node.role === 'button' && node.name === 'Change canvas')
+    assert.ok(paintButton)
+    assert.equal((await request('first-session', { action: 'click', target, snapshot: background.snapshot, element: paintButton.ref })).status, 'delivered')
+    const afterImage = await image('canvas-background-after')
+    assert.deepEqual(await guest.executeJavaScript('[...document.querySelector("canvas").getContext("2d").getImageData(20,20,1,1).data]'), [0, 0, 255, 255], 'Independent canvas readback must confirm the click')
+    assert.deepEqual(afterImage.pixel.slice(0, 3), [255, 0, 0], 'Screenshot must contain the new blue pixels, not cached red pixels')
+    assert.equal(window.isFocused(), false, 'Capture must keep the existing foreground')
+    assert.equal(guest.getBackgroundThrottling(), true, 'Temporary rendering policy must be restored')
+    checks.push({ name: 'background scroll and fresh canvas screenshot without foreground activation', scrollY, elapsedMs: Math.round(performance.now() - scrollStarted), beforeImage, afterImage })
+    cover.destroy()
     const concurrent = await Promise.all([open('first-session'), open('second-session')])
     for (const result of concurrent) assert.equal(result.value.status, 'delivered', JSON.stringify(result))
     assert.equal(new Set([target, ...concurrent.map(item => item.value.target)]).size, 3)

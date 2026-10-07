@@ -106,9 +106,23 @@ export function apply(ctx: Context): void {
       return onModelOpen((request) => {
         if (opened.has(request.lease)) return
         opened.add(request.lease)
-        ctx.sidebarRight.openTabIn(request.sessionId as BrowserBodyProps['sessionId'], 'browser', {
-          params: { url: request.url, automationLease: request.lease }, revealIfOpened: false,
-        })
+        const report = (message: string): void => {
+          void desktop?.reportFailure?.(request.lease, { code: 'browser-client-initialization-failed', message })
+            .catch(() => { console.error('Browser initialization failure could not reach Desktop') })
+        }
+        if (ctx.sidebarRight.mounted.getSnapshot() !== request.sessionId) {
+          report('Open this task in the Desktop window, then request a new browser tab. Its Sidebar is not mounted; no page was opened.')
+          return
+        }
+        try {
+          const accepted = ctx.sidebarRight.openTabIn(request.sessionId as BrowserBodyProps['sessionId'], 'browser', {
+            params: { url: request.url, automationLease: request.lease }, revealIfOpened: false,
+          })
+          if (!accepted) report('This task Sidebar is still initializing. Wait for the task to finish opening, then request a new browser tab.')
+        } catch (error) {
+          console.error('Browser model tab presentation failed', error)
+          report('The Sidebar could not create this browser tab. Reopen the task and request a new tab; check the Desktop log if this persists.')
+        }
       })
     }, 'ui-sidebar-browser.model-tabs')
   }

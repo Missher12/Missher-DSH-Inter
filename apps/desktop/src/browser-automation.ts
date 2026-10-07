@@ -17,6 +17,7 @@ interface Entry {
   generation: number
   controlRevision: number
   pending: Set<AbortController>
+  inFlight: Set<Promise<unknown>>
   closing?: Promise<void>
 }
 /** Desktop dependencies expose only owned guest allocation and trusted file selection. */
@@ -37,12 +38,16 @@ export interface BrowserAutomationHost {
 const result = (status: DesktopBrowserResult['status'], message: string): DesktopBrowserResult => ({ status, message })
 const sameOwner = (a: BrowserOwner, b: BrowserOwner): boolean => a.sessionId === b.sessionId && a.activationId === b.activationId
 const keys = new Set(['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'])
+// Transport safety ceilings, including native calls that do not accept AbortSignal.
+const operationDeadlineMs = 30_000
+const fileSelectionDeadlineMs = 120_000
 
 /** Owns model-created guests, queues, control transfer and observation generations. */
 export class DesktopBrowserAutomation {
   private stopped = false
   private readonly entries = new Map<BrowserTargetId, Entry>()
   private readonly retired = new Set<string>()
+  private readonly paintingOwners = new Map<WebContents, { users: number; throttling: boolean }>()
   constructor(private readonly host: BrowserAutomationHost) {}
 
   /** @param lease - main-issued guest. @param guest - attached webContents. */
@@ -89,6 +94,9 @@ export class DesktopBrowserAutomation {
       await entry.tail
       if (revision !== entry.controlRevision || entry.closing !== undefined || this.stopped) return entry.state
       if (entry.guest?.isDestroyed() !== false) throw new Error('Reopen the disconnected browser')
+      if (entry.inFlight.size !== 0) throw new Error('A previous browser command is still settling. Inspect the page manually, or close and reopen this tab before resuming.')
+      entry.state = { target: entry.state.target, sessionId: entry.owner.sessionId,
+        status: entry.state.status, storage: entry.state.storage }
       this.invalidate(entry)
       this.change(entry, 'ready')
     } else {
@@ -118,7 +126,7 @@ export class DesktopBrowserAutomation {
       if (!this.host.allowed(op.url)) return result('denied', 'Only ordinary HTTP(S) pages outside the application Host may be opened.')
       const reservation = this.host.reserve(owner)
       const target = reservation.lease as string as BrowserTargetId
-      const entry: Entry = { owner, reservation, state: { target, sessionId: owner.sessionId, status: 'initializing', storage: reservation.partition.startsWith('persist:') ? 'persistent' : 'temporary' }, elements: new Map(), tail: Promise.resolve(), generation: 0, controlRevision: 0, pending: new Set() }
+      const entry: Entry = { owner, reservation, state: { target, sessionId: owner.sessionId, status: 'initializing', storage: reservation.partition.startsWith('persist:') ? 'persistent' : 'temporary' }, elements: new Map(), tail: Promise.resolve(), generation: 0, controlRevision: 0, pending: new Set(), inFlight: new Set() }
       this.entries.set(target, entry)
       const opening = new AbortController()
       entry.pending.add(opening)
@@ -154,18 +162,55 @@ export class DesktopBrowserAutomation {
     const combined = AbortSignal.any([signal, controller.signal])
     const task = entry.tail.then(async () => {
       combined.throwIfAborted()
-      if (entry.state.status === 'taken-over' || entry.state.status === 'stopped') return result('denied', 'The user has stopped browser control. Resume from the browser toolbar, then observe again.')
-      if (entry.guest?.isDestroyed() !== false) return result('stale-target', 'Browser target disconnected. Open a new tab and observe it.')
+      if (entry.state.status === 'taken-over' || entry.state.status === 'stopped') return result('denied', entry.state.failure === undefined
+        ? 'Browser control is stopped. Resume from the browser toolbar, then observe again.'
+        : `Browser control stopped after ${entry.state.failure.code}. Close and reopen this tab before continuing.`)
+      if (entry.state.status === 'disconnected' || entry.guest?.isDestroyed() !== false) return result('stale-target', 'Browser target disconnected. Open a new tab and observe it.')
       if (generation !== entry.generation && 'snapshot' in op) return result('stale-snapshot', 'The page changed while this action was queued. Observe again.')
       this.change(entry, 'running', op.action)
-      try { return await this.execute(entry, op, combined) }
+      const timeout = new AbortController()
+      const timer = setTimeout(() => { timeout.abort() }, op.action === 'upload' ? fileSelectionDeadlineMs : operationDeadlineMs)
+      const active = AbortSignal.any([combined, timeout.signal])
+      const guest = entry.guest
+      let throttling: boolean | undefined
+      const readOnly = op.action === 'screenshot' || op.action === 'observe' || op.action === 'wait'
+      let releaseOwnerPainting: (() => void) | undefined
+      try {
+        throttling = guest.getBackgroundThrottling()
+        // A guest's WasShown does not synchronize the occluded owner view's surface.
+        // Concurrent targets share this temporary owner lease without activating it.
+        releaseOwnerPainting = this.keepOwnerPainting(guest)
+        guest.setBackgroundThrottling(false)
+        return await this.execute(entry, op, active)
+      }
       catch (error) {
-        if (combined.aborted) return result('uncertain', 'Browser work was interrupted. Already delivered input is not undone; observe before deciding what to do next.')
+        if (active.aborted) {
+          if (entry.state.status === 'running') this.take(entry, 'stopped')
+          const reason = timeout.signal.aborted ? 'timed out' : 'was interrupted'
+          const message = readOnly
+            ? `Browser ${op.action} ${reason}. No ${op.action === 'screenshot' ? 'image' : 'observation'} is available from this operation. Control stopped; close and reopen this tab before continuing.`
+            : `Browser ${op.action} ${reason}. Input may have completed; do not replay it. Inspect the page, then resume and observe. If a command is still settling, close and reopen the tab.`
+          entry.state = { ...entry.state, failure: { code: timeout.signal.aborted ? 'browser-operation-timeout' : 'browser-operation-interrupted', message } }
+          this.publish(entry.state)
+          return { ...result('uncertain', message), target: entry.state.target, data: { failure: entry.state.failure } }
+        }
         // Electron errors can carry URLs and filesystem paths; the product receives a bounded diagnosis.
         console.error('Owned browser operation failed', error)
         this.invalidate(entry)
+        if (readOnly) return result('unavailable', `Browser ${op.action} failed. No ${op.action === 'screenshot' ? 'image' : 'observation'} is available from this operation. Check the Desktop log and observe again before acting.`)
         return result('uncertain', 'The browser could not confirm this operation. Already delivered input may have completed. Observe current state before deciding what to do next.')
       } finally {
+        clearTimeout(timer)
+        try {
+          try { if (throttling !== undefined && !guest.isDestroyed()) guest.setBackgroundThrottling(throttling) }
+          finally { releaseOwnerPainting?.() }
+        } catch (error) {
+          console.error('Owned browser rendering restoration failed', error)
+          this.take(entry, 'stopped')
+          entry.state = { ...entry.state, failure: { code: 'browser-rendering-restore-failed',
+            message: 'The browser could not restore its rendering settings. Close and reopen this tab before continuing.' } }
+          this.publish(entry.state)
+        }
         if (entry.state.status === 'running') this.change(entry, 'ready')
       }
     }).finally(() => { entry.pending.delete(controller) })
@@ -188,7 +233,7 @@ export class DesktopBrowserAutomation {
     const command = async (method: string, params?: object): Promise<unknown> => {
       signal.throwIfAborted()
       if ('snapshot' in op && generation !== entry.generation) throw new Error('Browser observation changed during input')
-      const value: unknown = await guest.debugger.sendCommand(method, params)
+      const value: unknown = await this.native(entry, signal, () => guest.debugger.sendCommand(method, params))
       signal.throwIfAborted()
       if ('snapshot' in op && generation !== entry.generation) throw new Error('Browser observation changed during input')
       return value
@@ -215,14 +260,23 @@ export class DesktopBrowserAutomation {
       return result('unavailable', 'The requested page text was not observed before the wait ended.')
     }
     if (op.action === 'screenshot') {
-      const picture = await guest.capturePage()
+      // Ask Chromium for a newly composited surface, rather than capturePage's
+      // previously presented bitmap when input and capture run back-to-back.
+      const picture = await command('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false }) as { data?: unknown }
       signal.throwIfAborted()
-      return { ...result('observed', 'Screenshot of this visible browser tab; image admission depends on the selected model.'), target: entry.state.target, image: { data: picture.toPNG().toString('base64'), mimeType: 'image/png' } }
+      if (generation !== entry.generation) return result('stale-snapshot', 'Navigation changed during capture; capture the current page again.')
+      const png = typeof picture.data === 'string' ? Buffer.from(picture.data, 'base64') : Buffer.alloc(0)
+      if (png.length < 45 || !png.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+        || png.toString('ascii', 12, 16) !== 'IHDR' || png.readUInt32BE(16) === 0 || png.readUInt32BE(20) === 0) {
+        this.invalidate(entry)
+        return result('unavailable', 'The browser returned an empty or invalid image. Make the tab visible and capture it again before acting.')
+      }
+      return { ...result('observed', 'Screenshot of this owned browser tab; image admission depends on the selected model.'), target: entry.state.target, image: { data: png.toString('base64'), mimeType: 'image/png' } }
     }
     if (op.action === 'navigate') {
       if (!this.host.allowed(op.url)) return result('denied', 'Navigation to this address is not permitted.')
       this.invalidate(entry)
-      await guest.loadURL(op.url)
+      await this.native(entry, signal, () => guest.loadURL(op.url))
       signal.throwIfAborted()
       return { ...result('delivered', 'Navigation completed; observe the resulting page.'), target: entry.state.target }
     }
@@ -244,7 +298,7 @@ export class DesktopBrowserAutomation {
       await command('DOM.focus', { backendNodeId: node })
       await command('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: process.platform === 'darwin' ? 4 : 2, commands: ['selectAll'] })
       await command('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA' })
-      await guest.insertText(op.text)
+      await this.native(entry, signal, () => guest.insertText(op.text))
       signal.throwIfAborted()
       if (generation !== entry.generation) throw new Error('Browser observation changed during input')
     } else if (op.action === 'press') {
@@ -254,7 +308,7 @@ export class DesktopBrowserAutomation {
     } else if (op.action === 'scroll') {
       await command('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 40, y: 40, deltaX: 0, deltaY: op.delta })
     } else {
-      const files = await this.host.selectUpload(guest)
+      const files = await this.native(entry, signal, () => this.host.selectUpload(guest))
       signal.throwIfAborted()
       if (files.length === 0) return result('cancelled', 'The user did not select a file.')
       if (entry.snapshot !== op.snapshot) return result('stale-snapshot', 'The page changed during file selection; observe again.')
@@ -262,6 +316,41 @@ export class DesktopBrowserAutomation {
     }
     this.invalidate(entry)
     return { ...result('delivered', 'Input was delivered. Observe the page to verify the requested outcome.'), target: entry.state.target }
+  }
+
+  // Stop waiting promptly, but retain unsettled native work so resume cannot overlap it.
+  // Cancellation does not undo an input already dispatched to Chromium.
+  private async native<T>(entry: Entry, signal: AbortSignal, start: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted()
+    const pending = start()
+    entry.inFlight.add(pending)
+    const settled = pending.finally(() => { entry.inFlight.delete(pending) })
+    let abort: (() => void) | undefined
+    try {
+      return await Promise.race([settled, new Promise<never>((_resolve, reject) => {
+        abort = () => { reject(signal.reason instanceof Error ? signal.reason : new Error('Browser operation cancelled')) }
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+      })])
+    } finally { if (abort !== undefined) signal.removeEventListener('abort', abort) }
+  }
+
+  private keepOwnerPainting(guest: WebContents): () => void {
+    const owner = guest.hostWebContents
+    if (owner === null || owner.isDestroyed()) return () => {}
+    let lease = this.paintingOwners.get(owner)
+    if (lease === undefined) {
+      const throttling = owner.getBackgroundThrottling()
+      owner.setBackgroundThrottling(false)
+      lease = { users: 0, throttling }
+      this.paintingOwners.set(owner, lease)
+    }
+    lease.users++
+    return () => {
+      if (--lease.users !== 0) return
+      this.paintingOwners.delete(owner)
+      if (!owner.isDestroyed()) owner.setBackgroundThrottling(lease.throttling)
+    }
   }
 
   private invalidate(entry: Entry): void { entry.generation++; delete entry.snapshot; entry.elements.clear() }
@@ -289,7 +378,9 @@ export class DesktopBrowserAutomation {
       for (const pending of entry.pending) pending.abort()
     }
     entry.closing = (async () => {
-      try { await entry.tail; await this.host.release(entry.reservation.lease) }
+      // Destroy this exact guest before awaiting the queue: a stalled renderer must not
+      // prevent close/dispose. No later continuation can dispatch after take() aborts it.
+      try { await this.host.release(entry.reservation.lease); await entry.tail }
       finally { this.entries.delete(entry.state.target) }
     })()
     return entry.closing
