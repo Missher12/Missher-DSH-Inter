@@ -49,7 +49,7 @@ Launch **DeepSeek Harness** from the application menu. The DEB package was insta
 
 ## Plugins / 独立插件
 
-Each row opens the plugin’s own GitHub repository. Its README covers installation, in-app entry points, settings and limits, and links back here. Install a plugin package through the desktop **Plugins → Add plugin** page; follow the [installation guide](docs/cookbook/install-cordis-plugins.md) for profile ownership and removal.
+This directory focuses on the plugins currently in development. Each row opens the plugin’s own GitHub repository. Its README covers installation, in-app entry points, settings and limits, and links back here. Install a plugin package through the desktop **Plugins → Add plugin** page; follow the [installation guide](docs/cookbook/install-cordis-plugins.md) for profile ownership and removal.
 
 | Plugin | What it does |
 | --- | --- |
@@ -63,18 +63,6 @@ Each row opens the plugin’s own GitHub repository. Its README covers installat
 | [Media (private)](https://github.com/Missher12/Missher-Media) | Chrome CDP collection and selected exports |
 
 Media is private: a 404 can mean your GitHub account lacks permission. MSE publishes the product only, without private learning records. All plugins are optional; a removed host-version range is not a guarantee of compatibility with every future release.
-
-### Other maintained extensions
-
-These are separate projects with their own version lines and compatibility evidence. They are not prerequisites for the plugins above; review each project’s requirements before installation.
-
-| Project | Purpose |
-| --- | --- |
-| [Memory / 项目记忆](https://github.com/Missher12/Missher-DSH-Memory) | Project-scoped reviewed memory |
-| [Evolution / 学习适配](https://github.com/Missher12/Missher-DSH-Evolution) | MSE SDK adapter for its existing product line |
-| [Brain / 召回汇总](https://github.com/Missher12/Missher-DSH-Brain) | Combines participating memory providers |
-| [Project Ops / 项目任务](https://github.com/Missher12/Missher-DSH-Project-Ops) | Declared tasks and verification receipts |
-| [Lark / 飞书](https://github.com/Missher12/Missher-DSH-Lark) | Paired private-chat development control |
 
 ## Common questions
 

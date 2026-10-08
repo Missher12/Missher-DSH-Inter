@@ -49,7 +49,7 @@ sudo apt install ./deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb
 
 ## 独立插件：按需要选择
 
-每一行都能跳转到插件自己的 GitHub。各仓库 README 说明安装方法、应用内入口、设置与限制，并能返回本页。桌面版通过 **插件 → 添加插件** 安装；具体配置组和移除方式见[安装指南](docs/cookbook/install-cordis-plugins.zh.md)。
+本页集中展示当前开发的插件。每一行都能跳转到插件自己的 GitHub。各仓库 README 说明安装方法、应用内入口、设置与限制，并能返回本页。桌面版通过 **插件 → 添加插件** 安装；具体配置组和移除方式见[安装指南](docs/cookbook/install-cordis-plugins.zh.md)。
 
 | 插件 | 主要用途 |
 | --- | --- |
@@ -63,18 +63,6 @@ sudo apt install ./deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb
 | [Media 媒体采集（私有）](https://github.com/Missher12/Missher-Media) | 通过 Chrome CDP 采集、保留证据和选择导出 |
 
 Media 保持私有：GitHub 显示 404 可能是账号没有访问权限。MSE 只公开产品代码，不包含私人学习记录。所有插件按需选择；取消宿主版本号限制不等于保证未来所有版本都兼容。
-
-### 其他独立扩展
-
-这些是独立维护的项目，有自己的版本线和兼容记录，不是上面的插件的前置依赖。安装前先看各仓库要求，不能把旧基线验收当成当前桌面已经通过。
-
-| 项目 | 用途 |
-| --- | --- |
-| [Memory / 项目记忆](https://github.com/Missher12/Missher-DSH-Memory) | 按项目审核、保存和检索记忆 |
-| [Evolution / 学习适配](https://github.com/Missher12/Missher-DSH-Evolution) | 既有 MSE SDK 产品线的 Harness 适配 |
-| [Brain / 召回汇总](https://github.com/Missher12/Missher-DSH-Brain) | 汇总参与的记忆与学习提供者 |
-| [Project Ops / 项目任务](https://github.com/Missher12/Missher-DSH-Project-Ops) | 项目任务发现、执行和验证回执 |
-| [Lark / 飞书](https://github.com/Missher12/Missher-DSH-Lark) | 通过已配对的飞书/Lark 私聊操作项目与会话 |
 
 ## 常见问题
 
