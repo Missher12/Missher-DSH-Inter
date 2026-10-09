@@ -22,7 +22,9 @@ run = api(f"repos/{REPO}/actions/runs/{run_id}")
 assert run["path"] == ".github/workflows/missher-linux-desktop.yml"
 assert run["head_repository"]["full_name"] == REPO
 assert run["status"] == "completed" and run["conclusion"] == "success"
-release = api(f"repos/{REPO}/releases/tags/{tag}")
+matches = [row for row in api(f"repos/{REPO}/releases?per_page=100") if row["tag_name"] == tag]
+assert len(matches) == 1, "Expected one accessible release draft"
+release = matches[0]
 assert release["draft"], "Never modify assets of a published release"
 source = run["head_sha"]
 target = release["target_commitish"]
@@ -64,7 +66,7 @@ with zipfile.ZipFile(verification, "x", zipfile.ZIP_DEFLATED) as proof:
 report = root / "native-VERIFICATION.json"
 report.write_text(json.dumps(receipt, indent=2) + "\n")
 subprocess.run(["gh", "release", "upload", tag, str(report), str(verification), "--repo", REPO], check=True)
-remote = api(f"repos/{REPO}/releases/tags/{tag}")
+remote = api(f"repos/{REPO}/releases/{release["id"]}")
 assert remote["draft"]
 by_name = {a["name"]: a for a in remote["assets"]}
 for item in receipt["assets"]:
