@@ -6,7 +6,7 @@ The `Missher Desktop packages` workflow builds natively on Ubuntu and Windows. I
 
 Windows community packaging uses `apps/desktop/.env.community-windows.example`, copied to the ignored `.env.windows`, and `pnpm run package:desktop:win:x64:unsigned`. `DSH_DESKTOP_COMMUNITY_BUILD=1` requires a separate application identity and an unsigned build; it omits the upstream mandatory-update service. Ordinary product releases still require their own policy configuration. There is no invented update server and no automatic replacement with upstream binaries.
 
-Ubuntu uses `.env.linux.example` and `pnpm run package:desktop:linux:x64`. Both platform jobs run under their native OS. The Xvfb check captures the presented page rather than relying on an unavailable compositor surface; screenshot errors still fail the job. Mac community identity and data preservation are managed by `distribution/macos/`.
+Windows CI checks out the exact source commit under a short drive-root path so bundled Python extensions stay within Windows DLL path limits during the packaged-runtime check. Ubuntu uses `.env.linux.example` and `pnpm run package:desktop:linux:x64`. Both platform jobs run under their native OS. The Xvfb check captures the presented page rather than relying on an unavailable compositor surface; screenshot errors still fail the job. Mac community identity and data preservation are managed by `distribution/macos/`.
 
 Plugins remain independent. A clean computer must install the fixed plugin releases linked from the download guide. Archive deletion requires Session Bridge and the Host deletion interface; browser automation additionally requires its matching Host adapters. Release and full native model acceptance are reported separately.
 
