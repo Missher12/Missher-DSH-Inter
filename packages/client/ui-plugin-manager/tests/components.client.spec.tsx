@@ -81,46 +81,33 @@ describe('installed version update controls', () => {
   const name = 'dsh-better-sidebar'
   const available = { status: 'available' as const, currentVersion: '0.16.0', version: '1.0.0', spec: `${name}@1.0.0`, registry: null }
 
-  it('places an explicit check after the version on cards and on the detail page', () => {
-    const { actions, set } = renderTab({ packages: [pkg()] })
+  it('shows the installed version without update entry points on cards or details', () => {
+    const { actions, set, setLanguage } = renderTab({ packages: [pkg()] })
     const card = document.querySelector('[data-plugin-package]') as HTMLElement
     expect(within(card).getByText('v0.16.0')).toBeTruthy()
-    fireEvent.click(within(card).getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) }))
-    expect(actions.checkUpdate).toHaveBeenCalledWith(name)
-    expect(document.querySelector('[data-plugin-detail]')).toBeNull()
-    expect(actions.openUpdate).not.toHaveBeenCalled()
+    expect(within(card).queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
     set({ updates: { [name]: available } })
-    expect(within(card).getByText(en.updateAvailable.replace('{version}', '1.0.0'))).toBeTruthy()
-    fireEvent.click(within(card).getByRole('button', { name: en.updateLabel.replace('{name}', name) }))
-    expect(actions.openUpdate).toHaveBeenCalledWith(name)
+    expect(within(card).queryByRole('button', { name: en.updateLabel.replace('{name}', name) })).toBeNull()
+    expect(within(card).queryByText(en.updateAvailable.replace('{version}', '1.0.0'))).toBeNull()
     fireEvent.click(within(card).getByRole('button', { name: en.openDetail.replace('{name}', name) }))
     const detail = document.querySelector('[data-plugin-detail]') as HTMLElement
     expect(within(detail).getByText('v0.16.0')).toBeTruthy()
-    expect(within(detail).getByRole('button', { name: en.updateLabel.replace('{name}', name) })).toBeTruthy()
-  })
-
-  it('shows checks, manual sources and errors without pretending a local package is current', () => {
-    const { set, setLanguage } = renderTab({ packages: [pkg()], updates: { [name]: { status: 'checking', currentVersion: '0.16.0' } } })
-    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', true)
-    expect(screen.getByText(en.updateChecking)).toBeTruthy()
-    set({ updates: { [name]: { status: 'manual', currentVersion: '0.16.0', source: 'path' } } })
-    expect(screen.getByText(en.updateManual)).toBeTruthy()
-    expect(screen.queryByText(en.updateCurrent)).toBeNull()
-    set({ updates: { [name]: { status: 'failed', currentVersion: '0.16.0', reason: 'offline' } } })
-    expect(screen.getByText(en.updateCheckFailed.replace('{reason}', 'offline'))).toBeTruthy()
-    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', false)
+    expect(within(detail).queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+    expect(within(detail).queryByRole('button', { name: en.updateLabel.replace('{name}', name) })).toBeNull()
     setLanguage(zh)
-    expect(screen.getByRole('button', { name: zh.checkUpdateLabel.replace('{name}', name) })).toBeTruthy()
-    set({ updates: { [name]: { status: 'refused', error: { code: 'tasks-active' } } } })
-    expect(screen.getByText(zh.reasonTasksActive)).toBeTruthy()
+    expect(within(detail).queryByRole('button', { name: zh.checkUpdateLabel.replace('{name}', name) })).toBeNull()
+    expect(actions.checkUpdate).not.toHaveBeenCalled()
+    expect(actions.openUpdate).not.toHaveBeenCalled()
   })
 
-  it('does not offer updates to shipped or prepared bundles and disables protected packages', () => {
-    const { set } = renderTab({ packages: [pkg({ installed: false, optional: true })] })
-    expect(screen.queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
-    set({ packages: [pkg({ readOnlyReason: 'management-required' })] })
-    expect(screen.getByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toHaveProperty('disabled', true)
-    set({ packages: [pkg()], updates: { [name]: { status: 'restart', currentVersion: '0.16.0' } } })
+  it('keeps prepared-update status without showing old check results', () => {
+    const { set } = renderTab({ packages: [pkg()], updates: { [name]: { status: 'checking', currentVersion: '0.16.0' } } })
+    expect(screen.queryByText(en.updateChecking)).toBeNull()
+    set({ updates: { [name]: { status: 'manual', currentVersion: '0.16.0', source: 'path' } } })
+    expect(screen.queryByText(en.updateManual)).toBeNull()
+    set({ updates: { [name]: { status: 'failed', currentVersion: '0.16.0', reason: 'offline' } } })
+    expect(screen.queryByText(en.updateCheckFailed.replace('{reason}', 'offline'))).toBeNull()
+    set({ updates: { [name]: { status: 'restart', currentVersion: '0.16.0' } } })
     expect(screen.getByText(en.updateRestart)).toBeTruthy()
     expect(screen.queryByRole('button', { name: en.checkUpdateLabel.replace('{name}', name) })).toBeNull()
   })
@@ -1031,7 +1018,6 @@ describe('PluginManagerPage', () => {
     const { actions, setLanguage } = renderTab({ install: { ...IDLE_INSTALL, open: true } })
     setLanguage(locale)
     expect(screen.getByPlaceholderText(placeholder)).toBeTruthy()
-    expect(screen.getByText(locale.installUpgradeNotice)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: locale.installGuideToggle }))
     expect(screen.getByText('dsh-plugin-whale-pet')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: locale.installGuideFillAria.replace('{example}', 'dsh-plugin-whale-pet') }))

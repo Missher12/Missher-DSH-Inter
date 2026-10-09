@@ -378,40 +378,23 @@ function DetailTop({ crumbLabel, crumbText, onBack, icon, actions }: {
   )
 }
 
-/** Installed version and explicit update controls shared by cards and detail pages. */
-function PackageVersion({ pkg, t, update, busy, onCheck, onUpdate, onDiscardUpdate }: {
+/** Installed version and prepared-update status shared by cards and detail pages. */
+function PackageVersion({ pkg, t, update, busy, onDiscardUpdate }: {
   readonly pkg: PackageView
   readonly t: Translate
   readonly update: BundleUpdateState | undefined
   readonly busy: boolean
-  readonly onCheck: () => void
-  readonly onUpdate: () => void
   readonly onDiscardUpdate: () => void
 }): ReactNode {
-  const checking = update?.status === 'checking'
-  const ready = update?.status === 'available' || update?.status === 'manual'
   const prepared = pkg.pendingUpdate !== undefined || update?.status === 'restart'
   const stagedVersion = pkg.pendingUpdate?.version ?? (update?.status === 'restart' ? update.stagedVersion : undefined)
-  const message = prepared ? stagedVersion === undefined ? t('updateRestart') : t('updatePreparedVersion', { version: stagedVersion })
-    : update?.status === 'available' ? t('updateAvailable', { version: update.version })
-      : update?.status === 'current' ? t('updateCurrent')
-        : update?.status === 'manual' ? t('updateManual')
-          : update?.status === 'refused' ? managementText(update.error, t)
-            : update?.status === 'failed' ? t('updateCheckFailed', { reason: update.reason }) : null
+  const message = stagedVersion === undefined ? t('updateRestart') : t('updatePreparedVersion', { version: stagedVersion })
   return (
     <>
       {pkg.version === undefined ? null : <Tag className={css.versionTag} tone="neutral">{t('versionTag', { version: pkg.version })}</Tag>}
-      {!pkg.installed ? null : (
+      {!pkg.installed || !prepared ? null : (
         <span className={css.updateControls}>
-          {prepared ? null : <Button variant="outline" size="sm"
-            disabled={busy || checking || pkg.readOnlyReason !== undefined}
-            aria-busy={checking}
-            {...pkg.readOnlyReason === undefined ? {} : { title: managementText({ code: pkg.readOnlyReason }, t) }}
-            aria-label={t(ready ? 'updateLabel' : 'checkUpdateLabel', { name: pkg.name })}
-            onClick={ready ? onUpdate : onCheck}>
-            {t(checking ? 'updateChecking' : ready ? 'updateAction' : 'checkUpdate')}
-          </Button>}
-          {message === null ? null : <span className={css.updateMessage} role="status">{message}</span>}
+          <span className={css.updateMessage} role="status">{message}</span>
           {pkg.pendingUpdate === undefined ? null : <Button variant="outline" size="sm"
             disabled={busy || pkg.readOnlyReason !== undefined}
             aria-label={t('discardUpdateLabel', { name: pkg.name })}
@@ -424,7 +407,7 @@ function PackageVersion({ pkg, t, update, busy, onCheck, onUpdate, onDiscardUpda
 
 /** One package as a card that opens its page: its name, its one-liner, its tags, and its bundle switch. */
 function PackageCard({
-  pkg, t, resolveText, busy, updateBusy, update, highlighted, onOpen, onSetEnabled, onCheckUpdate, onUpdate, onDiscardUpdate,
+  pkg, t, resolveText, busy, updateBusy, update, highlighted, onOpen, onSetEnabled, onDiscardUpdate,
 }: {
   readonly pkg: PackageView
   readonly t: Translate
@@ -435,8 +418,6 @@ function PackageCard({
   readonly highlighted: boolean
   readonly onOpen: () => void
   readonly onSetEnabled: (enabled: boolean) => void
-  readonly onCheckUpdate: () => void
-  readonly onUpdate: () => void
   readonly onDiscardUpdate: () => void
 }): ReactNode {
   const { title, description, beta } = packageText(pkg, resolveText)
@@ -456,7 +437,7 @@ function PackageCard({
         tags={(
           <>
             <PackageVersion pkg={pkg} t={t} update={update} busy={updateBusy}
-              onCheck={onCheckUpdate} onUpdate={onUpdate} onDiscardUpdate={onDiscardUpdate} />
+              onDiscardUpdate={onDiscardUpdate} />
             {beta ? <Tag className={css.statusTag} tone="info">{t('statusBeta')}</Tag> : null}
             {status === 'problem' ? <Tag className={css.statusTag} tone="danger">{t('statusProblem')}</Tag> : null}
           </>
@@ -595,7 +576,7 @@ function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
  */
 function PackageDetail({
   pkg, t, resolveText, busy, updateBusy, update, rowBusy, configured, configure, renderSlot,
-  onBack, onSetEnabled, onUninstall, onSetRowEnabled, onCheckUpdate, onUpdate, onDiscardUpdate,
+  onBack, onSetEnabled, onUninstall, onSetRowEnabled, onDiscardUpdate,
 }: {
   readonly pkg: PackageView
   readonly t: Translate
@@ -612,8 +593,6 @@ function PackageDetail({
   readonly onBack: () => void
   readonly onSetEnabled: (enabled: boolean) => void
   readonly onUninstall: () => void
-  readonly onCheckUpdate: () => void
-  readonly onUpdate: () => void
   readonly onDiscardUpdate: () => void
   readonly onSetRowEnabled: (row: PackageRow, enabled: boolean) => void
 }): ReactNode {
@@ -653,7 +632,7 @@ function PackageDetail({
         <div className={css.titleRow}>
           <h3 className={css.detailTitle}>{title}</h3>
           <PackageVersion pkg={pkg} t={t} update={update} busy={updateBusy}
-            onCheck={onCheckUpdate} onUpdate={onUpdate} onDiscardUpdate={onDiscardUpdate} />
+            onDiscardUpdate={onDiscardUpdate} />
           {beta ? <Tag className={css.statusTag} tone="info">{t('statusBeta')}</Tag> : null}
           {status === 'problem' ? <Tag className={css.statusTag} tone="danger">{t('statusProblem')}</Tag> : null}
           {renderSlot('plugins.detail.badge', { subject })}
@@ -964,7 +943,6 @@ function InstallDialog({
               <IconWarningOutlineRegular size={14} aria-hidden="true" />
               <span className={css.installSafetyText}>
                 <span>{t('installGuideSafety')}</span>
-                <span>{t('installUpgradeNotice')}</span>
               </span>
             </p>
             <Button variant="primary" className={css.wide} disabled={checking || empty} aria-busy={checking} onClick={onRun}>
@@ -1385,8 +1363,6 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
       highlighted={state.highlight === pkg.name}
       onOpen={() => { setActivation(null); setView({ kind: 'package', name: pkg.name }) }}
       onSetEnabled={(enabled) => { setActivation(enabled ? pkg.name : null); props.setEnabled(pkg.name, enabled) }}
-      onCheckUpdate={() => { props.checkUpdate(pkg.name) }}
-      onUpdate={() => { props.openUpdate(pkg.name) }}
       onDiscardUpdate={() => { props.discardUpdate(pkg.name) }}
     />
   )
@@ -1497,8 +1473,6 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             onBack={() => { setView({ kind: 'list' }) }}
             onSetEnabled={(enabled) => { props.setEnabled(openPkg.name, enabled) }}
             onUninstall={() => { props.uninstall(openPkg.name) }}
-            onCheckUpdate={() => { props.checkUpdate(openPkg.name) }}
-            onUpdate={() => { props.openUpdate(openPkg.name) }}
             onDiscardUpdate={() => { props.discardUpdate(openPkg.name) }}
             onSetRowEnabled={setRowEnabled}
           />
