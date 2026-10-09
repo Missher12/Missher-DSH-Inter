@@ -18,7 +18,7 @@ Intel 芯片的 Mac 选择 **Intel Mac**；使用 Intel/AMD 64 位处理器的 U
 | **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-missher.20261009.1) | Ubuntu 24.04 x64 |
 | **Ubuntu x64 便携格式** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | 已构建；未单独完成 AppImage 启动验收 |
 
-本次发行包含归档删除、模型行内设置和浏览器集成所需的 Missher 宿主扩展。请另外安装[配套插件合集](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-dsh-plugins-20261009-context-local3.zip)中的独立插件；精确版本和校验值见[包清单](distribution/plugin-set.json)。宿主基础版本为 0.2.0-rc.2，官方 0.2.1-alpha.1 属于尚未验收的另一轮迁移。 已装上下文插件的电脑需在上下文设置中切换“按进展等待”并保存，原固定值保留；合集附有升级步骤。
+本次发行包含归档删除、模型行内设置和浏览器集成所需的 Missher 宿主扩展。请另外安装[配套插件合集](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-dsh-plugins-20261009-context-local4.zip)中的独立插件；精确版本和校验值见[包清单](distribution/plugin-set.json)。宿主基础版本为 0.2.0-rc.2，官方 0.2.1-alpha.1 属于尚未验收的另一轮迁移。 Context local.4 保留已有时限设置和用量记录；自动摘要额度用尽时，可在恢复页预检并明确确认一次额外维护调用。安装步骤与限制见 [Context 发布说明](https://github.com/Missher12/Missher-DSH-Context-Manager/releases/tag/v0.10.0-local.4)。
 
 每个发布页提供 SHA-256 校验文件和验证范围，[全部发布记录](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases)保留早期安装包。GitHub 的 **Code → Download ZIP** 下载的是源码，不能代替安装包。这些社区包尚未配置自动安装更新源。
 

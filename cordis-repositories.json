@@ -38,12 +38,12 @@
     },
     {
       "repository": "Missher12/Missher-DSH-Context-Manager",
-      "version": "0.10.0-local.3",
-      "commit": "99e5e3e7c673a54006ad1a524319431fe6b3e0d3",
+      "version": "0.10.0-local.4",
+      "commit": "55fa6718f8f1d3abfc81daddbc248ee53a734377",
       "visibility": "public",
       "package": "@missher/dsh-context-manager",
-      "download": "https://github.com/Missher12/Missher-DSH-Context-Manager/releases/download/v0.10.0-local.3/missher-dsh-context-manager-0.10.0-local.3.tgz",
-      "sha256": "ee89235c016b76f6fac653fc8096ebd012a46aa314ea2b9f0b55d3700e48a50d"
+      "download": "https://github.com/Missher12/Missher-DSH-Context-Manager/releases/download/v0.10.0-local.4/missher-dsh-context-manager-0.10.0-local.4.tgz",
+      "sha256": "604c1bae692640944ce5e071bc74722e309991f9b946c660854b11d6e321fa80"
     },
     {
       "repository": "Missher12/Missher-DSH-Reasoning-Effort",
