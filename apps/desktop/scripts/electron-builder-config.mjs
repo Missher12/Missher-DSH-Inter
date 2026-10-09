@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
+  isCommunityDesktopBuild,
   resolveDesktopAppId,
   resolveMacOSNotarizationEnvironment,
   resolveMacOSSigningEnvironment,
@@ -54,12 +55,14 @@ export function createElectronBuilderConfig(
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
-  // Community Linux downloads have no official policy or auto-install service.
-  const policy = resolvedPlatform === 'linux' ? undefined : resolveDesktopPolicyEnvironment(env)
+  // Community distributions have no official mandatory-update or auto-install service.
+  const community = isCommunityDesktopBuild(env)
+  const policy = resolvedPlatform === 'linux' || community ? undefined : resolveDesktopPolicyEnvironment(env)
   if (env.DSH_DESKTOP_UNSIGNED !== undefined && !['0', '1'].includes(env.DSH_DESKTOP_UNSIGNED)) {
     throw new Error('desktop package: DSH_DESKTOP_UNSIGNED must be 0 or 1')
   }
   const unsigned = env.DSH_DESKTOP_UNSIGNED === '1'
+  if (community && !unsigned) throw new Error('desktop package: community distributions require unsigned packaging')
   if (unsigned && resolvedPlatform !== 'linux' && resolvedPlatform !== 'win32' && !(resolvedPlatform === 'darwin' && resolvedArch === 'x64')) {
     throw new Error('desktop package: unsigned builds require Windows or Intel macOS')
   }

@@ -119,3 +119,15 @@ export function resolveMacOSNotarizationEnvironment(env) {
 
   throw new Error('desktop release environment: macOS packaging requires APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER; APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID; or APPLE_KEYCHAIN_PROFILE')
 }
+
+/** Identify explicitly unsigned community distributions without an official update service. */
+export function isCommunityDesktopBuild(env) {
+  const value = env.DSH_DESKTOP_COMMUNITY_BUILD
+  if (value !== undefined && value !== '0' && value !== '1') {
+    throw new Error('desktop package: DSH_DESKTOP_COMMUNITY_BUILD must be 0 or 1')
+  }
+  if (value === '1' && resolveDesktopAppId(env) === 'com.deepseek.harness') {
+    throw new Error('desktop package: community distributions require their own application identity')
+  }
+  return value === '1'
+}

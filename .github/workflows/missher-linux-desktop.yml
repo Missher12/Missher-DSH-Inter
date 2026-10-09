@@ -1,4 +1,4 @@
-name: Missher Ubuntu desktop
+name: Missher Desktop packages
 
 on:
   workflow_dispatch:
@@ -13,15 +13,21 @@ permissions:
   contents: read
 
 concurrency:
-  group: missher-linux-${{ github.ref }}
+  group: missher-desktop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   package:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: windows-2022
+            target: win-x64
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    permissions:
-      contents: write
     env:
       DSH_TELEMETRY_DISABLED: '1'
       DSH_GATE_CONCURRENCY: '2'
@@ -35,55 +41,63 @@ jobs:
           node-version: '24'
           cache: pnpm
       - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libfuse2t64 xvfb fakeroot
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --system core.longpaths true
       - run: pnpm install --frozen-lockfile
-      - name: Check platform selection and launcher
-        run: pnpm exec vitest run apps/desktop/tests/package-target.spec.ts apps/desktop/tests/desktop-build-paths.spec.ts apps/desktop/tests/desktop-package-environment.spec.ts apps/desktop/tests/cli-launcher.spec.ts apps/desktop/tests/installer-packaging.spec.ts scripts/libreoffice-engine.spec.ts scripts/build-exe-for-python-sdk-office.spec.ts apps/desktop/tests/runtime-file-policy.spec.ts --maxWorkers=2
-      - name: Build and verify Linux runtime
+      - name: Check platform selection and packaging boundaries
+        run: pnpm exec vitest run apps/desktop/tests/community-package.spec.ts apps/desktop/tests/package-target.spec.ts apps/desktop/tests/desktop-build-paths.spec.ts apps/desktop/tests/desktop-package-environment.spec.ts apps/desktop/tests/cli-launcher.spec.ts apps/desktop/tests/installer-packaging.spec.ts scripts/libreoffice-engine.spec.ts scripts/build-exe-for-python-sdk-office.spec.ts apps/desktop/tests/runtime-file-policy.spec.ts --maxWorkers=2
+      - name: Build Linux runtime
+        if: runner.os == 'Linux'
         run: |
           cp apps/desktop/.env.linux.example apps/desktop/.env.linux
           pnpm run package:desktop:linux:x64
-      - name: Install Debian package and verify desktop under Xvfb
+      - name: Build Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item apps/desktop/.env.community-windows.example apps/desktop/.env.windows
+          pnpm run package:desktop:win:x64:unsigned
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install Debian package and verify visible renderer
+        if: runner.os == 'Linux'
         run: |
           artifacts=apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts
           deb=$(realpath "$artifacts/"*.deb)
           sudo apt-get install -y "$deb"
-          executable=$(command -v deepseek-harness)
-          test -f "$executable"
-          test -x "$executable"
-          xvfb-run -a node apps/desktop/scripts/smoke-linux-shell.mjs "$executable" linux-verification
-      - name: Record download checksums
-        working-directory: apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts
-        run: sha256sum *.deb *.AppImage > SHA256SUMS
-      - name: Publish verified Ubuntu downloads
-        env:
-          GH_TOKEN: ${{ github.token }}
+          xvfb-run -a -s '-screen 0 1440x1000x24' node apps/desktop/scripts/smoke-community-shell.mjs "$(command -v deepseek-harness)" desktop-verification
+      - name: Install Windows package and verify visible renderer
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          version=$(node -p 'require("./apps/desktop/package.json").version')
-          tag="inter-v${version}-ubuntu.${GITHUB_RUN_NUMBER}"
-          artifacts=apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts
-          cat > ubuntu-release.md <<'NOTES'
-          Missher DSH Inter for Ubuntu x64. Reuses the current desktop source with Linux-native runtime dependencies.
-
-          Download the .deb for installation on Ubuntu, or the AppImage for portable use. Verify SHA256SUMS before installing. These are unsigned community builds; automatic installation updates are not configured.
-
-          Validation: native runtime and Host startup, Office conversion, packaged runtime, Debian package installation, and its real Electron renderer under Xvfb. No live model/provider call was made. Private plugins, credentials and personal sessions are not included.
-          NOTES
-          gh release create "$tag" "$artifacts/"*.deb "$artifacts/"*.AppImage "$artifacts/SHA256SUMS" --target "$GITHUB_SHA" --title "Missher DSH Inter ${version} · Ubuntu x64" --notes-file ubuntu-release.md --latest
-      - uses: actions/upload-artifact@v4
+          $setup = @(Get-ChildItem apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts -Filter '*unsigned.exe')
+          if ($setup.Count -ne 1) { throw 'Expected exactly one Windows installer' }
+          $install = Join-Path $env:RUNNER_TEMP 'Missher-installed'
+          $process = Start-Process -FilePath $setup[0].FullName -ArgumentList @('/S', "/D=$install") -PassThru
+          if (-not $process.WaitForExit(180000) -or $process.ExitCode -ne 0) { throw 'Windows installer failed or timed out' }
+          node apps/desktop/scripts/smoke-community-shell.mjs (Join-Path $install 'DeepSeek Harness.exe') desktop-verification
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload verified installers and evidence
         if: success()
+        uses: actions/upload-artifact@v4
         with:
-          name: missher-linux-verification
+          name: missher-${{ matrix.target }}-verified
           compression-level: 0
           path: |
-            apps/desktop/.desktop-build/targets/linux-x64/unsigned-artifacts/SHA256SUMS
-            linux-verification/
-      - uses: actions/upload-artifact@v4
+            apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*.deb
+            apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*.AppImage
+            apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*unsigned.exe
+            desktop-verification/
+      - name: Preserve failure diagnostics
         if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: missher-linux-build-diagnostics
+          name: missher-${{ matrix.target }}-diagnostics
           path: |
             apps/desktop/.desktop-build/packaging-runs/
-            linux-verification/
+            desktop-verification/

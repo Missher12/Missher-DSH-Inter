@@ -69,3 +69,6 @@ export function resolveMacOSSigningEnvironment(env: NodeJS.ProcessEnv): MacOSSig
  * @returns Notary credentials without the submitted artifact path.
  */
 export function resolveMacOSNotarizationEnvironment(env: NodeJS.ProcessEnv): MacOSNotarizationEnvironment
+
+/** Identify explicitly unsigned community distributions with a separate application identity. */
+export function isCommunityDesktopBuild(env: NodeJS.ProcessEnv): boolean
