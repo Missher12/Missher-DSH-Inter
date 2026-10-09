@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { isDesktopUiReady } from './community-shell-readiness.mjs'
+import { inspectDesktopScreenshot } from './community-shell-raster.mjs'
 
 if (!['linux', 'win32'].includes(process.platform)) throw new Error('Shell smoke requires Linux or Windows')
 const windows = process.platform === 'win32'
@@ -68,7 +69,7 @@ try {
   }
   let document
   while (Date.now() < deadline) {
-    const result = await command('Runtime.evaluate', { expression: '({ready:document.readyState,boot:!!document.querySelector("[data-dsh-boot]"),controls:document.querySelectorAll("button,input,textarea,[role=button]").length,text:document.body?.innerText??"",width:innerWidth,height:innerHeight})', returnByValue: true })
+    const result = await command('Runtime.evaluate', { expression: '({url:location.href,ready:document.readyState,boot:!!document.querySelector("[data-dsh-boot]"),controls:document.querySelectorAll("button,input,textarea,[role=button]").length,text:document.body?.innerText??"",width:innerWidth,height:innerHeight})', returnByValue: true })
     document = result.result.value
     if (isDesktopUiReady(document)) break
     await delay(200)
@@ -79,18 +80,24 @@ try {
   if (failure) throw new Error(failure)
   await command('Page.enable')
   await command('Page.bringToFront')
-  const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: false })
+  const screenshot = await command('Page.captureScreenshot', { format: 'png', fromSurface: windows })
   const png = Buffer.from(screenshot.data, 'base64')
   if (!png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) || png.length < 1000) throw new Error('Desktop screenshot is not a usable PNG')
   await writeFile(join(output, 'desktop.png'), Buffer.from(screenshot.data, 'base64'))
-  await writeFile(join(output, 'desktop-shell.json'), JSON.stringify({ platform: process.platform, arch: process.arch,
-    renderer: page.url.replace(/([?&]token=)[^&]+/gu, '$1[redacted]'), document, sandboxDisabled: false, modelCalled: false }, null, 2) + '\n')
+  const raster = await inspectDesktopScreenshot(png)
+  await writeFile(join(output, 'raster-state.json'), JSON.stringify(raster, null, 2) + '\n')
+  if (!raster.hasContent) throw new Error('Desktop screenshot has no rendered pixel variation')
+  await writeFile(join(output, 'desktop-shell.json'), JSON.stringify({ raster, platform: process.platform, arch: process.arch,
+    renderer: document.url.replace(/([?&]token=)[^&]+/gu, '$1[redacted]'), document, sandboxDisabled: false, modelCalled: false }, null, 2) + '\n')
   console.log('Packaged Desktop renderer and PNG verified')
 } finally {
   socket?.close()
   if (child.pid !== undefined) {
     if (windows) {
-      if (child.exitCode === null) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+      if (child.exitCode === null) {
+        const stopped = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+        await writeFile(join(output, 'process-stop.json'), JSON.stringify({ pid: child.pid, status: stopped.status, stdout: stopped.stdout?.toString(), stderr: stopped.stderr?.toString() }, null, 2) + '\n')
+      }
     } else {
       try { process.kill(-child.pid, 'SIGTERM') } catch (error) { if (error.code !== 'ESRCH') throw error }
     }
@@ -98,5 +105,5 @@ try {
     try { await closed } finally { clearTimeout(timer) }
   }
   await writeFile(join(output, 'desktop-shell.log'), log.replace(/([?&]token=)[^\s&]+/gu, '$1[redacted]'))
-  await rm(root, { recursive: true, force: true })
+  await rm(root, { recursive: true, force: true, maxRetries: windows ? 10 : 0, retryDelay: 250 })
 }
