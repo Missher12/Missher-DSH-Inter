@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { isDesktopUiReady } from './community-shell-readiness.mjs'
 
 if (!['linux', 'win32'].includes(process.platform)) throw new Error('Shell smoke requires Linux or Windows')
 const windows = process.platform === 'win32'
@@ -67,12 +68,13 @@ try {
   }
   let document
   while (Date.now() < deadline) {
-    const result = await command('Runtime.evaluate', { expression: '({ready:document.readyState,text:document.body?.innerText??"",width:innerWidth,height:innerHeight})', returnByValue: true })
+    const result = await command('Runtime.evaluate', { expression: '({ready:document.readyState,boot:!!document.querySelector("[data-dsh-boot]"),controls:document.querySelectorAll("button,input,textarea,[role=button]").length,text:document.body?.innerText??"",width:innerWidth,height:innerHeight})', returnByValue: true })
     document = result.result.value
-    if (document?.ready === 'complete' && document.text.trim().length > 10) break
+    if (isDesktopUiReady(document)) break
     await delay(200)
   }
-  if (document?.ready !== 'complete' || document.text.trim().length <= 10 || document.width <= 0 || document.height <= 0) throw new Error('Desktop renderer is empty')
+  await writeFile(join(output, 'renderer-state.json'), JSON.stringify(document ?? null, null, 2) + '\n')
+  if (!isDesktopUiReady(document)) throw new Error('Desktop UI did not finish plugin loading; see renderer-state.json')
   const failure = await readFile(diagnostic, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
   if (failure) throw new Error(failure)
   await command('Page.enable')
