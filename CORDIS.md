@@ -18,6 +18,6 @@
 
 ## 平台
 
-macOS 和 Ubuntu 复用桌面源代码，分别生成本机二进制与原生依赖。Linux 构建由 Missher Ubuntu desktop 工作流执行，包含运行时 Host、Office 转换和 Xvfb 下的实际桌面窗口检查。只有通过该工作流并发布的安装包才属于可下载交付；工作流存在不代表包已发布。
+本次下载提供 Intel Mac 与 Ubuntu x64。Ubuntu 构建由 Missher Ubuntu Desktop packages 工作流执行，包含运行时 Host、Office 转换、实际安装和 Xvfb 桌面窗口检查。两端复用产品源码，分别生成本机二进制与原生依赖；只有检查通过并已发布的安装包属于下载交付。
 
 根 LICENSE、THIRD_PARTY_NOTICES.md 与独立插件许可证继续保留。

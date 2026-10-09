@@ -1,4 +1,4 @@
-name: Missher Desktop packages
+name: Missher Ubuntu Desktop packages
 
 on:
   workflow_dispatch:
@@ -25,9 +25,6 @@ jobs:
           - os: ubuntu-24.04
             target: linux-x64
             workdir: .
-          - os: windows-2022
-            target: win-x64
-            workdir: D:/dsh
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     defaults:
@@ -50,17 +47,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libfuse2t64 xvfb fakeroot
-      - name: Prepare short Windows checkout
-        if: runner.os == 'Windows'
-        shell: pwsh
-        working-directory: ${{ github.workspace }}
-        run: |
-          git config --system core.longpaths true
-          if (Test-Path 'D:/dsh') { throw 'Short checkout already exists' }
-          git clone --no-hardlinks --no-checkout $env:GITHUB_WORKSPACE D:/dsh
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C D:/dsh checkout --detach $env:GITHUB_SHA
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: pnpm install --frozen-lockfile
       - name: Check platform selection and packaging boundaries
         run: pnpm exec vitest run apps/desktop/tests/community-shell-raster.spec.ts apps/desktop/tests/community-shell-readiness.spec.ts apps/desktop/tests/community-package.spec.ts apps/desktop/tests/package-target.spec.ts apps/desktop/tests/desktop-build-paths.spec.ts apps/desktop/tests/desktop-package-environment.spec.ts apps/desktop/tests/cli-launcher.spec.ts apps/desktop/tests/installer-packaging.spec.ts scripts/libreoffice-engine.spec.ts scripts/build-exe-for-python-sdk-office.spec.ts apps/desktop/tests/runtime-file-policy.spec.ts --maxWorkers=2
@@ -69,13 +55,6 @@ jobs:
         run: |
           cp apps/desktop/.env.linux.example apps/desktop/.env.linux
           pnpm run package:desktop:linux:x64
-      - name: Build Windows runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Copy-Item apps/desktop/.env.community-windows.example apps/desktop/.env.windows
-          pnpm run package:desktop:win:x64:unsigned
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install Debian package and verify visible renderer
         if: runner.os == 'Linux'
         run: |
@@ -83,17 +62,6 @@ jobs:
           deb=$(realpath "$artifacts/"*.deb)
           sudo apt-get install -y "$deb"
           xvfb-run -a -s '-screen 0 1440x1000x24' node apps/desktop/scripts/smoke-community-shell.mjs "$(command -v deepseek-harness)" desktop-verification
-      - name: Install Windows package and verify visible renderer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $setup = @(Get-ChildItem apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts -Filter '*unsigned.exe')
-          if ($setup.Count -ne 1) { throw 'Expected exactly one Windows installer' }
-          $install = Join-Path $env:RUNNER_TEMP 'Missher-installed'
-          $process = Start-Process -FilePath $setup[0].FullName -ArgumentList @('/S', "/D=$install") -PassThru
-          if (-not $process.WaitForExit(180000) -or $process.ExitCode -ne 0) { throw 'Windows installer failed or timed out' }
-          node apps/desktop/scripts/smoke-community-shell.mjs (Join-Path $install 'DeepSeek Harness.exe') desktop-verification
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload verified installers and evidence
         if: success()
         uses: actions/upload-artifact@v4
@@ -103,7 +71,6 @@ jobs:
           path: |
             ${{ matrix.workdir }}/apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*.deb
             ${{ matrix.workdir }}/apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*.AppImage
-            ${{ matrix.workdir }}/apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/*unsigned.exe
             ${{ matrix.workdir }}/desktop-verification/
       - name: Preserve failure diagnostics
         if: failure()

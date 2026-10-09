@@ -14,6 +14,7 @@ EXPECTED = {
     "@missher/dsh-reasoning-effort": "Missher12/Missher-DSH-Reasoning-Effort",
     "@missher/dsh-media-missher": "Missher12/Missher-Media",
     "@missher/dsh-mse-learning": "Missher12/Missher-MSE-Learning",
+    "@missher/dsh-computer-browser": "Missher12/Missher-DSH-Computer-Browser",
 }
 
 
@@ -34,6 +35,17 @@ def main():
     }
     if private != {"Missher12/Missher-Media"}:
         raise SystemExit("Private repository declarations require explicit user review.")
+    public_packages = {row["name"]: row for row in json.loads((ROOT / "distribution/plugin-set.json").read_text())["packages"] if not row.get("thirdParty")}
+    expected_public = {entry["package"] for entry in inventory["external"] if entry["visibility"] == "public"}
+    if set(public_packages) != expected_public:
+        raise SystemExit("Download set and public Bundle inventory disagree.")
+    for entry in inventory["external"]:
+        if entry["visibility"] != "public":
+            continue
+        release = public_packages[entry["package"]]
+        for field, key in [("version", "version"), ("commit", "sourceCommit"), ("download", "url"), ("sha256", "sha256")]:
+            if entry[field] != release[key]:
+                raise SystemExit("Published version, commit and download set must stay aligned.")
     tracked = subprocess.check_output(
         ["git", "ls-files", "-z"], cwd=ROOT
     ).decode().split("\0")
@@ -44,7 +56,7 @@ def main():
     forbidden = [name for name in tracked if name.startswith(excluded)]
     if forbidden:
         raise SystemExit("Private or local-only directories entered the public index.")
-    print("Seven independent Bundles verified; private and local-only directories excluded.")
+    print("Eight independent Bundles verified; private and local-only directories excluded.")
 
 
 if __name__ == "__main__":

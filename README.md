@@ -10,15 +10,15 @@ The application does not include a model account or API credits. Configure your 
 
 ## Download / 下载安装
 
-Choose **Intel Mac** for a Mac with an Intel processor, and **Ubuntu x64** for a 64-bit Intel/AMD Ubuntu PC. “Intel” is the processor family; the old repository name used “Inter”. These packages do not target Apple Silicon natively, Linux ARM or Windows.
+Choose **Intel Mac** for a Mac with an Intel processor, and **Ubuntu x64** for a 64-bit Intel/AMD Ubuntu PC. “Intel” is the processor family; the old repository name used “Inter”. These packages do not target Apple Silicon natively or Linux ARM.
 
 | Computer / 电脑 | Download / 下载 | Requirements |
 | --- | --- | --- |
-| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.2/missher-deepseek-harness-0.2.0-rc.2-cbu-mac-x64.dmg) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.2) | macOS x64; community unsigned build |
-| **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/inter-v0.2.0-rc.2-ubuntu.6) | Ubuntu 24.04 x64 |
-| **Ubuntu x64, portable** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | Built; separate AppImage launch not qualified |
+| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-deepseek-harness-0.2.0-rc.2-20261009-mac-x64.dmg) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-missher.20261009.1) | macOS x64; community unsigned build |
+| **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [Release notes / 版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-missher.20261009.1) | Ubuntu 24.04 x64 |
+| **Ubuntu x64, portable** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | Built; separate AppImage launch not qualified |
 
-The Intel Mac browser integration build supplies the Host interfaces required by Computer Browser. The Ubuntu downloads above retain their existing validation scope and do not include this integration.
+This release includes the Missher Host extensions for archived-session deletion, model-row settings, and browser integration. Install the independent plugins from the [matching plugin ZIP](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-dsh-plugins-20261009.zip); exact versions and digests are in [the package manifest](distribution/plugin-set.json). The Host base is 0.2.0-rc.2; upstream 0.2.1-alpha.1 is a separate, unqualified migration.
 
 Each release includes SHA-256 checksums and its validation scope. [All releases](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases) retain earlier packages. A source ZIP under **Code** is a source snapshot, not an installer. Automatic installation updates are not configured for these community packages.
 
@@ -45,7 +45,7 @@ Launch **DeepSeek Harness** from the application menu. The DEB package was insta
 1. Choose a project folder as your workspace. If the system Documents directory is unavailable, select a folder manually.
 2. Open model settings, add your provider, endpoint, API key and model name. Model support determines text/image input and reasoning levels.
 3. Start a small conversation to verify your provider. API usage may be charged by that provider.
-4. Install only the optional plugins you need from the directory below. They are not bundled with the application download.
+4. Extract the matching plugin ZIP and use **Plugins → Add plugin** for the `.tgz` files you need. For an installed plugin, check updates beside its version and select the new package when prompted; prepare the update and restart after active tasks finish. Compare the displayed versions with the manifest. Desktop installers do not automatically install personal plugins.
 
 ## Plugins / 独立插件
 
@@ -56,10 +56,10 @@ This directory focuses on the plugins currently in development. Each row opens t
 | [Context Manager](https://github.com/Missher12/Missher-DSH-Context-Manager) | Inspect and compact the current conversation context |
 | [Usage Statistics](https://github.com/Missher12/Missher-DSH-Usage-Statistics) | Activity and usage across conversations |
 | [Output Renderer](https://github.com/Missher12/Missher-DSH-Output-Renderer) | Four reading layouts, spacing and streaming effects |
-| [Session Bridge](https://github.com/Missher12/Missher-DSH-Session-Bridge) | Session IDs, message delivery and temporary workspaces |
+| [Session Bridge](https://github.com/Missher12/Missher-DSH-Session-Bridge) | Session IDs, message delivery, temporary workspaces and permanent deletion of archived sessions |
 | [Reasoning Effort](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) | Reasoning slider and model capability settings |
 | [MSE Learning](https://github.com/Missher12/Missher-MSE-Learning) | Scoped learning from corrections and evaluated methods |
-| [Computer Browser](https://github.com/Missher12/Missher-DSH-Computer-Browser) | Visible browser automation and session-owned computer controls; requires the Intel Mac browser integration build |
+| [Computer Browser](https://github.com/Missher12/Missher-DSH-Computer-Browser) | Visible browser automation and session-owned computer controls; requires the matching Missher Host adapters; real computer/model workflows still need platform acceptance |
 | [Media (private)](https://github.com/Missher12/Missher-Media) | Chrome CDP collection and selected exports |
 
 Media is private: a 404 can mean your GitHub account lacks permission. MSE publishes the product only, without private learning records. All plugins are optional; a removed host-version range is not a guarantee of compatibility with every future release.
@@ -68,9 +68,11 @@ Media is private: a 404 can mean your GitHub account lacks permission. MSE publi
 
 **Why is an installed plugin missing?** Check the active application/profile, whether the plugin is enabled, and the load error. Restart or reload as requested by the host. Updating Git source alone does not update an installed application.
 
+**Why is archive deletion missing?** Install Session Bridge from the matching plugin set and use this Missher Desktop build. The deletion action is available only for archived sessions when the Host exposes the deletion interface. An unmodified official Host may lack that interface.
+
 **Does Git sync my chats?** No. The repositories contain product source and distributable files. Move private data separately with a backup; never put API keys, cookies, chat logs or learning databases into public Git.
 
-**Can Mac and Ubuntu share changes?** Yes, the desktop source is shared. Native executables and installers must be built for each platform. A Mac DMG cannot run on Ubuntu.
+**Can Mac, Windows and Ubuntu share changes?** Yes, the desktop source is shared. Native executables and installers must be built for each platform. A Mac DMG cannot run on Ubuntu.
 
 **Where should I report a problem?** Use the affected plugin’s Issues for plugin behavior, and this repository’s Issues for installation or desktop startup. Include OS, app/plugin versions, steps and redacted errors.
 

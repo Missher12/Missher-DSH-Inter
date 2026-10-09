@@ -4,7 +4,7 @@ English | [中文](README.zh.md)
 
 [Repository home](../README.md) · [Install](../docs/cookbook/install-cordis-plugins.md) · [Develop](../docs/cookbook/build-cordis-plugins.md)
 
-Choose a plugin by the task it solves. These four public Bundles share a Git repository but keep separate builds, packages, settings, and installation; none requires a separate common compatibility plugin.
+Choose a plugin by the task it solves. These seven public Bundles have independent repositories, builds, packages, settings, and installation; none requires a separate common compatibility plugin.
 
 <a id="public-plugins"></a>
 
@@ -15,9 +15,12 @@ Choose a plugin by the task it solves. These four public Bundles share a Git rep
 | Context Manager | Pre-request compaction, current context, content, per-reply changes, and session totals | Conversation → Context; Settings → Context Management | [Guide](https://github.com/Missher12/Missher-DSH-Context-Manager/tree/main/README.md) · [Source](https://github.com/Missher12/Missher-DSH-Context-Manager/tree/main/src/) · [Package](https://github.com/Missher12/Missher-DSH-Context-Manager/tree/main/package.json) |
 | Usage Statistics | Cross-session usage, activity, and model/tool/skill rankings | Settings → Usage Statistics | [Guide](https://github.com/Missher12/Missher-DSH-Usage-Statistics/tree/main/README.md) · [Source](https://github.com/Missher12/Missher-DSH-Usage-Statistics/tree/main/src/) · [Package](https://github.com/Missher12/Missher-DSH-Usage-Statistics/tree/main/package.json) |
 | Output Renderer | Four single-column assistant-output layouts, full reasoning, tool details, and streaming effects | Settings → Output Appearance | [Guide](https://github.com/Missher12/Missher-DSH-Output-Renderer/tree/main/README.md) · [Source](https://github.com/Missher12/Missher-DSH-Output-Renderer/tree/main/src/) · [Package](https://github.com/Missher12/Missher-DSH-Output-Renderer/tree/main/package.json) |
-| Session Bridge | Session IDs, cross-session messages, and scratch workspaces | Session header; New Session → workspace selector | [Guide](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/README.md) · [Source](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/src/) · [Package](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/package.json) |
+| Session Bridge | Session IDs, cross-session messages, scratch workspaces and archived-session deletion | Session header; New Session → workspace selector | [Guide](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/README.md) · [Source](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/src/) · [Package](https://github.com/Missher12/Missher-DSH-Session-Bridge/tree/main/package.json) |
+| Reasoning Effort | Reasoning slider, colors and per-model levels | Model settings; reasoning control | [Guide and releases](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) |
+| MSE Learning | Scoped learning and recall of corrections and evaluated methods | MSE settings and commands | [Guide and releases](https://github.com/Missher12/Missher-MSE-Learning) |
+| Computer Browser | Session-owned browser and computer controls | Browser sidebar and Computer tools | [Guide and releases](https://github.com/Missher12/Missher-DSH-Computer-Browser) |
 
-Package names and versions come from the linked manifests; [cordis-repositories.json](../cordis-repositories.json) records the independent repository inventory. Existing historical validation reports describe their own date and scope, not an automatic pass for a new installation.
+Package downloads and exact accepted versions are pinned in [the release manifest](../distribution/plugin-set.json); [cordis-repositories.json](../cordis-repositories.json) records the independent repository inventory. Existing historical validation reports describe their own date and scope, not an automatic pass for a new installation.
 
 ## Choose the right owner
 
@@ -34,7 +37,7 @@ Composer references list callable capabilities. A plugin that only adds a settin
 
 ## Separate projects
 
-[Reasoning Effort](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) is public and includes the pixel-depth slider design. [Media@Missher](https://github.com/Missher12/Missher-Media) remains private and requires repository permission. [MSE Learning](https://github.com/Missher12/Missher-MSE-Learning) is an independent public product. Their source is not included here; see [ownership and privacy](../CORDIS.md#独立项目).
+[Media@Missher](https://github.com/Missher12/Missher-Media) remains private and requires repository permission. [OpenViking](https://github.com/volcengine/OpenViking) is a third-party memory service with an optional DSH plugin; configure its service and embedding model separately. Public source and packages contain no private learning records; see [ownership and privacy](../CORDIS.md#独立项目).
 
 ## Next steps
 

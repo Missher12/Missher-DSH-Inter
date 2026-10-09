@@ -10,15 +10,15 @@
 
 ## 下载安装
 
-Intel 芯片的 Mac 选择 **Intel Mac**；使用 Intel/AMD 64 位处理器的 Ubuntu 电脑选择 **Ubuntu x64**。Intel 是处理器名称，旧仓库曾写成 Inter。本页安装包不包含 Apple Silicon 原生版、Linux ARM 版或 Windows 版。
+Intel 芯片的 Mac 选择 **Intel Mac**；使用 Intel/AMD 64 位处理器的 Ubuntu 电脑选择 **Ubuntu x64**。Intel 是处理器名称，旧仓库曾写成 Inter。本页安装包不包含 Apple Silicon 原生版或 Linux ARM 版。
 
 | 电脑 | 下载 | 适用范围 |
 | --- | --- | --- |
-| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-intel-mac.2/missher-deepseek-harness-0.2.0-rc.2-cbu-mac-x64.dmg) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-intel-mac.2) | Intel Mac；社区未公证包 |
-| **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/inter-v0.2.0-rc.2-ubuntu.6) | Ubuntu 24.04 x64 |
-| **Ubuntu x64 便携格式** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/inter-v0.2.0-rc.2-ubuntu.6/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | 已构建；未单独完成 AppImage 启动验收 |
+| **Intel Mac** | [DMG 安装包](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-deepseek-harness-0.2.0-rc.2-20261009-mac-x64.dmg) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-missher.20261009.1) | Intel Mac；社区未公证包 |
+| **Ubuntu x64** | [DEB 安装包（推荐）](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb) · [版本说明](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/tag/desktop-v0.2.0-rc.2-missher.20261009.1) | Ubuntu 24.04 x64 |
+| **Ubuntu x64 便携格式** | [AppImage](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/deepseek-harness-0.2.0-rc.2-linux-x86_64-unsigned.AppImage) | 已构建；未单独完成 AppImage 启动验收 |
 
-Intel Mac 浏览器集成版提供电脑与浏览器插件所需的宿主接口。上面的 Ubuntu 下载仍沿用原验证范围，不包含这次浏览器集成。
+本次发行包含归档删除、模型行内设置和浏览器集成所需的 Missher 宿主扩展。请另外安装[配套插件合集](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases/download/desktop-v0.2.0-rc.2-missher.20261009.1/missher-dsh-plugins-20261009.zip)中的独立插件；精确版本和校验值见[包清单](distribution/plugin-set.json)。宿主基础版本为 0.2.0-rc.2，官方 0.2.1-alpha.1 属于尚未验收的另一轮迁移。
 
 每个发布页提供 SHA-256 校验文件和验证范围，[全部发布记录](https://github.com/Missher12/Missher-DeepseekHarness-Desktop/releases)保留早期安装包。GitHub 的 **Code → Download ZIP** 下载的是源码，不能代替安装包。这些社区包尚未配置自动安装更新源。
 
@@ -45,7 +45,7 @@ sudo apt install ./deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb
 1. 选择一个项目文件夹作为工作区。如果系统没有可用的“文档”目录，手动选择文件夹即可。
 2. 打开模型设置，填入自己的服务商、地址、API Key 和模型名称；文本、图片与思考档位取决于模型实际能力。
 3. 发一条简单消息检查服务是否可用，模型调用费用由所使用的服务商计算。
-4. 按需安装下面的独立插件；桌面下载包不会自动安装所有个人插件。
+4. 解压配套插件合集，通过 **插件 → 添加插件** 逐个安装所需 `.tgz`。已有插件在版本旁检查更新，按提示选择新版包，准备好后等任务结束再正常重启；对照清单检查显示版本。桌面安装包不会自动安装个人插件。
 
 ## 独立插件：按需要选择
 
@@ -56,10 +56,10 @@ sudo apt install ./deepseek-harness-0.2.0-rc.2-linux-amd64-unsigned.deb
 | [上下文管理](https://github.com/Missher12/Missher-DSH-Context-Manager) | 查看当前会话上下文、来源、用量和压缩记录 |
 | [使用统计](https://github.com/Missher12/Missher-DSH-Usage-Statistics) | 查看跨会话活动、用量、排行及可调色方格 |
 | [输出外观](https://github.com/Missher12/Missher-DSH-Output-Renderer) | 四种阅读布局、字号间距与流式动效 |
-| [会话桥接](https://github.com/Missher12/Missher-DSH-Session-Bridge) | 复制会话 ID、跨会话投递和临时工作区 |
+| [会话桥接](https://github.com/Missher12/Missher-DSH-Session-Bridge) | 复制会话 ID、跨会话投递、临时工作区和归档会话永久删除 |
 | [思考强度](https://github.com/Missher12/Missher-DSH-Reasoning-Effort) | 思考滑块、配色以及模型能力与档位设置 |
 | [MSE 持久学习](https://github.com/Missher12/Missher-MSE-Learning) | 保存纠错和方法，并按任务与预算召回 |
-| [电脑与浏览器](https://github.com/Missher12/Missher-DSH-Computer-Browser) | 可见浏览器操作与按会话隔离的电脑控制；需要包含浏览器集成的 Intel Mac 构建 |
+| [电脑与浏览器](https://github.com/Missher12/Missher-DSH-Computer-Browser) | 可见浏览器操作与按会话隔离的电脑控制；需要配套 Missher Host 适配器；真实电脑及模型操作仍需分平台验收 |
 | [Media 媒体采集（私有）](https://github.com/Missher12/Missher-Media) | 通过 Chrome CDP 采集、保留证据和选择导出 |
 
 Media 保持私有：GitHub 显示 404 可能是账号没有访问权限。MSE 只公开产品代码，不包含私人学习记录。所有插件按需选择；取消宿主版本号限制不等于保证未来所有版本都兼容。
@@ -68,9 +68,11 @@ Media 保持私有：GitHub 显示 404 可能是账号没有访问权限。MSE �
 
 **为什么安装后找不到插件？** 检查当前应用及配置组是否正确、插件是否启用和加载错误；按宿主提示重启或重新加载。只更新 Git 源码不会自动更新已安装的应用。
 
+**为什么没有归档删除？** 安装配套合集中的会话桥接插件，并使用本次 Missher 桌面版。入口仅在已归档会话且宿主提供删除接口时显示；纯官方宿主可能没有该接口。
+
 **另一台电脑拉取 Git，会同步聊天吗？** 不会。仓库提供产品源码与可分发文件，私人数据需要另行备份迁移；不要把 API Key、Cookie、聊天记录或学习数据库放入公开 Git。
 
-**Mac 和 Ubuntu 能共用修改吗？** 可以共用桌面源码；原生程序和安装包必须分别构建。Mac 的 DMG 不能直接在 Ubuntu 运行。
+**Mac、Windows 和 Ubuntu 能共用修改吗？** 可以共用桌面源码；原生程序和安装包必须分别构建。Mac 的 DMG 不能直接在 Ubuntu 运行。
 
 **问题应该反馈到哪里？** 插件功能问题交给对应插件仓库的 Issues；安装与桌面启动问题交给本仓库。请提供系统、应用/插件版本、复现步骤及脱敏错误。
 

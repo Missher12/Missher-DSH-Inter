@@ -1,0 +1,32 @@
+name: Collect verified Missher installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Successful Missher Ubuntu Desktop packages run ID
+        required: true
+      release_tag:
+        description: Existing draft release tag
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: missher-desktop-release-collection
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and collect native installers into the draft
+        run: python3 .github/cordis/collect-desktop-release.py
